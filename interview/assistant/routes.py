@@ -238,6 +238,7 @@ def register_assistant_routes(app: FastAPI):
                     payload = data.get("payload", {})
                     question = payload.get("question", "").strip()
                     if question:
+                        print(f"[Agent] 收到问题(文本): {question}")
                         await _generate_and_send_answer(ws, session, question)
 
         except WebSocketDisconnect:

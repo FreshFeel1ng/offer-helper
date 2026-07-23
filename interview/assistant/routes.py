@@ -8,6 +8,7 @@
 """
 import asyncio
 import uuid
+import json
 from typing import Optional
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, File, UploadFile, Form, HTTPException
@@ -18,6 +19,11 @@ from .agent import InterviewAgent
 from .speech import preprocess_transcript, is_complete_question, extract_question
 from .audio_capture import SystemAudioCapture, WhisperTranscriber
 from .resume import ResumeKnowledgeBase
+from .mock import (
+    MockInterviewSession,
+    create_mock_session,
+    delete_mock_session,
+)
 
 
 class SessionConfig(BaseModel):
@@ -372,199 +378,149 @@ async def _handle_stop_audio_capture(session: dict):
         session["audio_task"] = None
     print("[Audio] 系统音频捕获已停止")
 
+    # ═══════════ 模拟面试 WebSocket ═══════════
 
-# ═══════════════════════════════════════════════════════════
-# 模拟面试模块
-# ═══════════════════════════════════════════════════════════
+    @app.websocket("/ws/mock")
+    async def ws_mock_interview(websocket: WebSocket):
+        """模拟面试 WebSocket"""
+        await websocket.accept()
+        session: Optional[MockInterviewSession] = None
+        session_id = str(uuid.uuid4())[:8]
 
-from .mock import (
-    MockInterviewSession,
-    get_mock_session,
-    create_mock_session,
-    delete_mock_session,
-)
-
-from .mock import _mock_sessions
-
-
-@app.websocket("/ws/mock")
-async def ws_mock_interview(websocket: WebSocket):
-    """模拟面试 WebSocket"""
-    await websocket.accept()
-    session: Optional[MockInterviewSession] = None
-    session_id = str(uuid.uuid4())[:8]
-
-    try:
-        while True:
-            raw = await websocket.receive_text()
-            data = json.loads(raw)
-            msg_type = data.get("type", "")
-
-            if msg_type == "configure":
-                # 配置面试参数
-                payload = data.get("payload", {})
-                session = create_mock_session(
-                    session_id=session_id,
-                    position=payload.get("position", "全栈开发工程师"),
-                    topic=payload.get("topic", "综合技术面试"),
-                    difficulty=payload.get("difficulty", "medium"),
-                    max_rounds=int(payload.get("max_rounds", 5)),
-                )
-                print(f"[Mock面试] 创建会话 {session_id}: {session.position} ({session.topic})")
-                await websocket.send_text(json.dumps({
-                    "type": "configured",
-                    "payload": session.to_summary(),
-                }, ensure_ascii=False))
-
-            elif msg_type == "start":
-                # 开始面试，出第一题
-                if not session:
-                    await websocket.send_text(json.dumps({
-                        "type": "error", "payload": {"message": "请先完成面试配置"}
-                    }, ensure_ascii=False))
-                    continue
-                question = await session.generate_question()
-                print(f"[Mock面试] 第{len(session.qa_history)}题: {question[:50]}...")
-                await websocket.send_text(json.dumps({
-                    "type": "question",
-                    "payload": {
-                        "question": question,
-                        "round": session.round_num,
-                        "total": session.max_rounds,
-                    },
-                }, ensure_ascii=False))
-
-            elif msg_type == "answer":
-                # 提交回答
-                if not session:
-                    await websocket.send_text(json.dumps({
-                        "type": "error", "payload": {"message": "没有活跃的面试"}
-                    }, ensure_ascii=False))
-                    continue
-                answer = data.get("payload", {}).get("text", "")
-                if not answer.strip():
-                    await websocket.send_text(json.dumps({
-                        "type": "error", "payload": {"message": "回答不能为空"}
-                    }, ensure_ascii=False))
-                    continue
-
-                print(f"[Mock面试] 收到第{len(session.qa_history)}题回答 ({len(answer)}字)")
-
-                # 评估
-                await websocket.send_text(json.dumps({
-                    "type": "evaluating",
-                    "payload": {"message": "正在评估..."},
-                }, ensure_ascii=False))
-
-                evaluation = await session.evaluate_answer(answer)
-                print(f"[Mock面试] 评分: {evaluation.get('score', 0)}/10")
-
-                await websocket.send_text(json.dumps({
-                    "type": "evaluation",
-                    "payload": evaluation,
-                }, ensure_ascii=False))
-
-            elif msg_type == "next":
-                # 下一题
-                if not session:
-                    await websocket.send_text(json.dumps({
-                        "type": "error", "payload": {"message": "没有活跃的面试"}
-                    }, ensure_ascii=False))
-                    continue
-
-                if session.STATUS == "finished":
-                    await websocket.send_text(json.dumps({
-                        "type": "finished",
-                        "payload": {"message": "面试已完成，请查看评估报告"},
-                    }, ensure_ascii=False))
-                    continue
-
-                question = await session.generate_question()
-                print(f"[Mock面试] 第{len(session.qa_history)}题: {question[:50]}...")
-                await websocket.send_text(json.dumps({
-                    "type": "question",
-                    "payload": {
-                        "question": question,
-                        "round": session.round_num,
-                        "total": session.max_rounds,
-                    },
-                }, ensure_ascii=False))
-
-            elif msg_type == "report":
-                # 生成评估报告
-                if not session:
-                    await websocket.send_text(json.dumps({
-                        "type": "error", "payload": {"message": "没有活跃的面试"}
-                    }, ensure_ascii=False))
-                    continue
-
-                await websocket.send_text(json.dumps({
-                    "type": "evaluating",
-                    "payload": {"message": "正在生成评估报告..."},
-                }, ensure_ascii=False))
-
-                report = await session.generate_report()
-                print(f"[Mock面试] 总评: {report.get('overall_score', 0)}/100")
-
-                # 保存到数据库
-                try:
-                    from boss.state import get_db
-                    db = get_db()
-                    cur = db.cursor()
-                    cur.execute("""
-                        INSERT INTO mock_interviews
-                            (position, topic, difficulty, rounds, qa_json, score,
-                             strengths, weaknesses, overall_evaluation)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    """, (
-                        session.position,
-                        session.topic,
-                        session.difficulty,
-                        len(session.qa_history),
-                        json.dumps(session.qa_history, ensure_ascii=False),
-                        report.get("overall_score", 0),
-                        json.dumps(report.get("strengths", []), ensure_ascii=False),
-                        json.dumps(report.get("weaknesses", []), ensure_ascii=False),
-                        json.dumps(report, ensure_ascii=False),
-                    ))
-                    db.commit()
-                    cur.close()
-                    print(f"[Mock面试] 报告已保存到数据库")
-                except Exception as e:
-                    print(f"[Mock面试] 保存报告失败: {e}")
-
-                await websocket.send_text(json.dumps({
-                    "type": "report",
-                    "payload": report,
-                }, ensure_ascii=False))
-
-            elif msg_type == "skip":
-                # 跳过当前题
-                if not session:
-                    continue
-                if session.qa_history:
-                    session.qa_history[-1]["a"] = "(跳过)"
-                    session.qa_history[-1]["score"] = 0
-                question = await session.generate_question()
-                await websocket.send_text(json.dumps({
-                    "type": "question",
-                    "payload": {
-                        "question": question,
-                        "round": session.round_num,
-                        "total": session.max_rounds,
-                    },
-                }, ensure_ascii=False))
-
-            elif msg_type == "ping":
-                await websocket.send_text(json.dumps({"type": "pong"}))
-
-    except Exception as e:
-        print(f"[Mock面试] WebSocket 异常: {e}")
         try:
-            await websocket.close()
-        except Exception:
-            pass
-    finally:
-        if session:
-            delete_mock_session(session_id)
-            print(f"[Mock面试] 会话 {session_id} 已清理")
+            while True:
+                raw = await websocket.receive_text()
+                data = json.loads(raw)
+                msg_type = data.get("type", "")
+
+                if msg_type == "configure":
+                    payload = data.get("payload", {})
+                    session = create_mock_session(
+                        session_id=session_id,
+                        position=payload.get("position", "全栈开发工程师"),
+                        topic=payload.get("topic", "综合技术面试"),
+                        difficulty=payload.get("difficulty", "medium"),
+                        max_rounds=int(payload.get("max_rounds", 5)),
+                    )
+                    print(f"[Mock面试] 创建会话 {session_id}: {session.position} ({session.topic})")
+                    await websocket.send_text(json.dumps({
+                        "type": "configured", "payload": session.to_summary(),
+                    }, ensure_ascii=False))
+
+                elif msg_type == "start":
+                    if not session:
+                        await websocket.send_text(json.dumps({
+                            "type": "error", "payload": {"message": "请先完成面试配置"}
+                        }, ensure_ascii=False))
+                        continue
+                    question = await session.generate_question()
+                    print(f"[Mock面试] 第{len(session.qa_history)}题: {question[:50]}...")
+                    await websocket.send_text(json.dumps({
+                        "type": "question",
+                        "payload": {"question": question, "round": session.round_num, "total": session.max_rounds},
+                    }, ensure_ascii=False))
+
+                elif msg_type == "answer":
+                    if not session:
+                        await websocket.send_text(json.dumps({
+                            "type": "error", "payload": {"message": "没有活跃的面试"}
+                        }, ensure_ascii=False))
+                        continue
+                    answer = data.get("payload", {}).get("text", "")
+                    if not answer.strip():
+                        await websocket.send_text(json.dumps({
+                            "type": "error", "payload": {"message": "回答不能为空"}
+                        }, ensure_ascii=False))
+                        continue
+                    print(f"[Mock面试] 收到第{len(session.qa_history)}题回答 ({len(answer)}字)")
+                    await websocket.send_text(json.dumps({
+                        "type": "evaluating", "payload": {"message": "正在评估..."},
+                    }, ensure_ascii=False))
+                    evaluation = await session.evaluate_answer(answer)
+                    print(f"[Mock面试] 评分: {evaluation.get('score', 0)}/10")
+                    await websocket.send_text(json.dumps({
+                        "type": "evaluation", "payload": evaluation,
+                    }, ensure_ascii=False))
+
+                elif msg_type == "next":
+                    if not session:
+                        await websocket.send_text(json.dumps({
+                            "type": "error", "payload": {"message": "没有活跃的面试"}
+                        }, ensure_ascii=False))
+                        continue
+                    if session.STATUS == "finished":
+                        await websocket.send_text(json.dumps({
+                            "type": "finished",
+                            "payload": {"message": "面试已完成，请查看评估报告"},
+                        }, ensure_ascii=False))
+                        continue
+                    question = await session.generate_question()
+                    print(f"[Mock面试] 第{len(session.qa_history)}题: {question[:50]}...")
+                    await websocket.send_text(json.dumps({
+                        "type": "question",
+                        "payload": {"question": question, "round": session.round_num, "total": session.max_rounds},
+                    }, ensure_ascii=False))
+
+                elif msg_type == "report":
+                    if not session:
+                        await websocket.send_text(json.dumps({
+                            "type": "error", "payload": {"message": "没有活跃的面试"}
+                        }, ensure_ascii=False))
+                        continue
+                    await websocket.send_text(json.dumps({
+                        "type": "evaluating", "payload": {"message": "正在生成评估报告..."},
+                    }, ensure_ascii=False))
+                    report = await session.generate_report()
+                    print(f"[Mock面试] 总评: {report.get('overall_score', 0)}/100")
+                    try:
+                        from boss.state import get_db
+                        db = get_db()
+                        cur = db.cursor()
+                        cur.execute("""
+                            INSERT INTO mock_interviews
+                                (position, topic, difficulty, rounds, qa_json, score,
+                                 strengths, weaknesses, overall_evaluation)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        """, (
+                            session.position, session.topic, session.difficulty,
+                            len(session.qa_history),
+                            json.dumps(session.qa_history, ensure_ascii=False),
+                            report.get("overall_score", 0),
+                            json.dumps(report.get("strengths", []), ensure_ascii=False),
+                            json.dumps(report.get("weaknesses", []), ensure_ascii=False),
+                            json.dumps(report, ensure_ascii=False),
+                        ))
+                        db.commit()
+                        cur.close()
+                        print(f"[Mock面试] 报告已保存到数据库")
+                    except Exception as e:
+                        print(f"[Mock面试] 保存报告失败: {e}")
+                    await websocket.send_text(json.dumps({
+                        "type": "report", "payload": report,
+                    }, ensure_ascii=False))
+
+                elif msg_type == "skip":
+                    if not session:
+                        continue
+                    if session.qa_history:
+                        session.qa_history[-1]["a"] = "(跳过)"
+                        session.qa_history[-1]["score"] = 0
+                    question = await session.generate_question()
+                    await websocket.send_text(json.dumps({
+                        "type": "question",
+                        "payload": {"question": question, "round": session.round_num, "total": session.max_rounds},
+                    }, ensure_ascii=False))
+
+                elif msg_type == "ping":
+                    await websocket.send_text(json.dumps({"type": "pong"}))
+
+        except Exception as e:
+            print(f"[Mock面试] WebSocket 异常: {e}")
+            try:
+                await websocket.close()
+            except Exception:
+                pass
+        finally:
+            if session:
+                delete_mock_session(session_id)
+                print(f"[Mock面试] 会话 {session_id} 已清理")

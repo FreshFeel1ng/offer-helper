@@ -1815,3 +1815,28 @@ td a:hover{color:var(--accent)}
   .ss-res-row{align-items:flex-start;flex-wrap:wrap}
 }
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:3px}
+
+/* ===== 模拟面试 ===== */
+.form-row{margin-bottom:8px}.form-row label{font-size:12px;color:var(--text-2);display:flex;flex-direction:column;gap:4px}
+.mock-qa-item{padding:8px;background:var(--bg);border-radius:6px;margin-bottom:6px;font-size:12px;line-height:1.5}
+.mock-qa-item .mock-q{font-weight:600;color:var(--accent-2);margin-bottom:4px}
+.mock-qa-item .mock-a{color:var(--text-2);}
+.mock-score{margin-top:4px;font-size:11px}
+.score-badge{display:inline-block;padding:1px 8px;background:var(--accent-soft);color:var(--accent);border-radius:10px;font-weight:700}
+.mock-comment{font-size:11px;color:var(--text-3);font-style:italic;margin-top:2px}
+.mock-report{background:var(--bg);border-radius:8px;padding:16px}
+.mock-report h3{font-size:16px;margin-bottom:12px}
+.mock-report h4{margin-top:12px;font-size:13px}
+.report-score{text-align:center;margin:16px 0}
+.big-score{font-size:48px;font-weight:800;color:var(--accent)}
+.report-grid{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:12px}
+.report-item{flex:1;min-width:100px;text-align:center;padding:12px;background:var(--bg-2);border-radius:8px;font-size:18px;font-weight:700}
+.report-item .rlabel{display:block;font-size:11px;color:var(--text-3);margin-bottom:4px;font-weight:400}
+.report-summary{font-size:13px;color:var(--text-2);line-height:1.6}
+.mock-history-list{display:flex;flex-direction:column;gap:4px}
+.mock-history-item{display:flex;gap:8px;align-items:center;padding:6px 8px;background:var(--bg);border-radius:6px;font-size:12px;cursor:pointer;transition:background .15s}
+.mock-history-item:hover{background:var(--accent-soft)}
+.mock-history-item .hpos{font-weight:600;min-width:100px}
+.mock-history-item .htopic{color:var(--text-2);flex:1}
+.mock-history-item .hscore{color:var(--accent);font-weight:700}
+.mock-history-item .hdate{color:var(--text-3);font-size:10px}

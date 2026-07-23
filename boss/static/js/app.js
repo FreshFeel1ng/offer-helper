@@ -20,7 +20,7 @@ function switchTab(tab) {
   var titles = {
     search:'岗位搜索',applications:'投递记录',chat:'聊天',wechat:'微信记录',
     transfer:'转人工',settings:'设置',agent:'AI Agent',kb:'知识库管理',
-    'qa-ask':'知识库问答',review:'面试回顾',assistant:'AI实时面试助手'
+    'qa-ask':'知识库问答',review:'模拟面试',assistant:'AI实时面试助手'
   };
   var el = document.getElementById('pageTitle');
   if (el) el.textContent = titles[tab] || '';
@@ -32,7 +32,7 @@ function switchTab(tab) {
   if (tab === 'wechat') loadWechatExchanges();
   if (tab === 'transfer') loadTransferRequests();
   if (tab === 'kb') loadKbStats();
-  if (tab === 'review') loadReviewDashboard();
+  if (tab === 'review') { if (typeof initMockTab === 'function') initMockTab(); }
   if (tab === 'assistant') { if (typeof assistantCheckStatus === 'function') assistantCheckStatus(); }
 }
 

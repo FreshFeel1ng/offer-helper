@@ -2618,6 +2618,50 @@ def llm_stats():
 #  AI 面试助手 — 按需启停
 # ══════════════════════════════════════
 
+# ── 模拟面试 API ──
+
+@app.get("/api/mock/list")
+def mock_list(limit: int = 20):
+    """模拟面试记录列表"""
+    from .state import list_mock_interviews
+    try:
+        records = list_mock_interviews(limit=limit)
+        return {"ok": True, "data": records}
+    except Exception as e:
+        print(f"[Mock面试] 查询列表失败: {e}")
+        return {"ok": False, "data": [], "error": str(e)}
+
+
+@app.get("/api/mock/{mock_id}")
+def mock_detail(mock_id: int):
+    """模拟面试详情"""
+    from .state import get_mock_interview
+    try:
+        record = get_mock_interview(mock_id)
+        if record:
+            return {"ok": True, "data": record}
+        return {"ok": False, "error": "记录不存在"}
+    except Exception as e:
+        print(f"[Mock面试] 查询详情失败: {e}")
+        return {"ok": False, "error": str(e)}
+
+
+@app.delete("/api/mock/{mock_id}")
+def mock_delete(mock_id: int):
+    """删除模拟面试记录"""
+    from .state import get_db
+    try:
+        db = get_db()
+        cur = db.cursor()
+        cur.execute("DELETE FROM mock_interviews WHERE id = %s", (mock_id,))
+        db.commit()
+        cur.close()
+        return {"ok": True}
+    except Exception as e:
+        print(f"[Mock面试] 删除失败: {e}")
+        return {"ok": False, "error": str(e)}
+
+
 _ASSISTANT_PORT = 8001
 _ASSISTANT_DIR = str(Path(__file__).resolve().parent.parent / "interview")
 

@@ -2621,6 +2621,38 @@ _ASSISTANT_PORT = 8001
 _ASSISTANT_DIR = str(Path(__file__).resolve().parent.parent / "interview")
 
 
+def _free_port(port: int):
+    """检查端口是否被占用，如果是则杀掉占用进程（僵尸子进程残留）。"""
+    import socket
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.settimeout(0.5)
+    in_use = sock.connect_ex(("127.0.0.1", port)) == 0
+    sock.close()
+    if not in_use:
+        return
+    print(f"[面试助手] 端口 {port} 被占用, 尝试释放...")
+    if sys.platform == "win32":
+        try:
+            result = subprocess.run(
+                f'netstat -ano | findstr :{port}', capture_output=True, text=True, shell=True, timeout=5
+            )
+            for line in result.stdout.strip().split("\n"):
+                parts = line.strip().split()
+                if len(parts) >= 5 and parts[1].endswith(f":{port}"):
+                    pid = parts[-1]
+                    if pid.isdigit():
+                        subprocess.run(f"taskkill /F /PID {pid}", capture_output=True, shell=True, timeout=5)
+                        print(f"[面试助手] 已终止占用端口的进程 PID={pid}")
+        except Exception:
+            pass
+    else:
+        try:
+            subprocess.run(f"fuser -k {port}/tcp", shell=True, timeout=5, capture_output=True)
+            print(f"[面试助手] 已释放端口 {port}")
+        except Exception:
+            pass
+
+
 @app.get("/api/assistant/status")
 def assistant_status():
     """面试助手服务是否在运行"""
@@ -2647,6 +2679,9 @@ async def assistant_start():
             "status": "no_api_key",
             "detail": "请先在「设置」页面配置 AI API Key（ai_api_key）",
         }
+
+    # 检查端口是否被僵尸进程占用，尝试释放
+    _free_port(_ASSISTANT_PORT)
 
     try:
         print(f"[面试助手] 正在启动子进程 (端口 {_ASSISTANT_PORT})...")
@@ -2684,6 +2719,7 @@ async def assistant_stop():
                 _assistant_process.wait()
         _assistant_process = None
         print(f"[面试助手] ✅ 子进程已停止")
+        _free_port(_ASSISTANT_PORT)
         return {"status": "stopped"}
     except Exception as e:
         print(f"[面试助手] ❌ 停止失败: {e}")

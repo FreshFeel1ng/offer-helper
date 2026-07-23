@@ -322,6 +322,7 @@ function resetMock() {
 /* ===== Speech Recognition ===== */
 var mockRecognition = null;
 var mockIsListening = false;
+var mockStarting = false;
 
 function toggleMockMic() {
   if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
@@ -329,9 +330,16 @@ function toggleMockMic() {
     return;
   }
 
-  if (mockIsListening) {
+  if (mockIsListening || mockStarting) {
     stopMockMic();
     return;
+  }
+
+  mockStarting = true;
+  // 先清理旧实例
+  if (mockRecognition) {
+    try { mockRecognition.abort(); } catch(e){}
+    mockRecognition = null;
   }
 
   var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -349,6 +357,7 @@ function toggleMockMic() {
 
   mockRecognition.onstart = function() {
     mockIsListening = true;
+    mockStarting = false;
     micBtn.textContent = '🔴 停止';
     micBtn.style.background = '#ef4444';
     originalText = answerInput.value.trim();
@@ -370,7 +379,6 @@ function toggleMockMic() {
     transcriptFinal += final;
     transcriptInterim = interim;
 
-    // 基准 = 本次识别前的原文 + 本次累积的识别结果
     var sep = originalText ? ' ' : '';
     answerInput.value = originalText + sep + transcriptFinal + transcriptInterim;
     showMockStatus('🎤 聆听中... (' + (transcriptFinal + transcriptInterim).length + '字)');
@@ -378,6 +386,7 @@ function toggleMockMic() {
 
   mockRecognition.onerror = function(event) {
     mockIsListening = false;
+    mockStarting = false;
     micBtn.textContent = '🎤';
     micBtn.style.background = '';
     console.error('[Mock] Speech error:', event.error);
@@ -386,6 +395,7 @@ function toggleMockMic() {
 
   mockRecognition.onend = function() {
     mockIsListening = false;
+    mockStarting = false;
     micBtn.textContent = '🎤';
     micBtn.style.background = '';
     if (!answerInput.value.trim()) {
@@ -399,8 +409,9 @@ function toggleMockMic() {
 }
 
 function stopMockMic() {
+  mockStarting = false;
   if (mockRecognition) {
-    try { mockRecognition.stop(); } catch(e){}
+    try { mockRecognition.abort(); } catch(e){}
     mockRecognition = null;
   }
   mockIsListening = false;

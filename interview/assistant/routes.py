@@ -365,24 +365,12 @@ async def _handle_start_audio_capture(ws: WebSocket, session: dict):
 
     print("[Audio] 系统音频捕获已启动")
 
-
-async def _handle_stop_audio_capture(session: dict):
-    """停止系统音频捕获"""
-    cap = session.get("audio_capture")
-    if cap:
-        cap.stop()
-        session["audio_capture"] = None
-    task = session.get("audio_task")
-    if task:
-        task.cancel()
-        session["audio_task"] = None
-    print("[Audio] 系统音频捕获已停止")
-
     # ═══════════ 模拟面试 WebSocket ═══════════
 
     @app.websocket("/ws/mock")
     async def ws_mock_interview(websocket: WebSocket):
         """模拟面试 WebSocket"""
+        print("[Mock面试] 收到 WebSocket 连接请求")
         await websocket.accept()
         session: Optional[MockInterviewSession] = None
         session_id = str(uuid.uuid4())[:8]
@@ -524,3 +512,16 @@ async def _handle_stop_audio_capture(session: dict):
             if session:
                 delete_mock_session(session_id)
                 print(f"[Mock面试] 会话 {session_id} 已清理")
+
+
+async def _handle_stop_audio_capture(session: dict):
+    """停止系统音频捕获"""
+    cap = session.get("audio_capture")
+    if cap:
+        cap.stop()
+        session["audio_capture"] = None
+    task = session.get("audio_task")
+    if task:
+        task.cancel()
+        session["audio_task"] = None
+    print("[Audio] 系统音频捕获已停止")

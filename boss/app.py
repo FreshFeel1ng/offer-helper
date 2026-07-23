@@ -2607,7 +2607,8 @@ def llm_stats():
     try:
         summary = get_token_stats(days=7)
         recent = list_token_usage(limit=10)
-    except Exception:
+    except Exception as e:
+        print(f"[Token统计] 查询失败: {e}")
         summary, recent = {}, []
 
     return {"summary": summary, "recent": recent}

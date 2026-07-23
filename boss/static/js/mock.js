@@ -37,6 +37,10 @@ function initMockTab() {
   var endBtn = document.getElementById('mockEndBtn');
   if (endBtn) endBtn.addEventListener('click', mockGetReport);
 
+  // 查看评估报告
+  var reportBtn = document.getElementById('mockReportBtn');
+  if (reportBtn) reportBtn.addEventListener('click', mockGetReport);
+
   // 查看过往记录
   loadMockHistory();
 }
@@ -151,6 +155,9 @@ function handleMockMessage(msg) {
     skipBtn.style.display = 'inline-block';
     if (micBtn) micBtn.style.display = 'inline-block';
     endBtn.style.display = 'inline-block';
+    document.getElementById('mockReportBtn').style.display = 'none';
+    var exitBtn2 = document.getElementById('mockExitBtn');
+    if (exitBtn2) exitBtn2.style.display = 'none';
     answerInput.focus();
     showMockStatus('请回答');
 
@@ -177,9 +184,24 @@ function handleMockMessage(msg) {
       answerInput.style.display = 'none';
       answerBtn.style.display = 'none';
       skipBtn.style.display = 'none';
-      showMockStatus('面试结束，请查看评估报告');
-      var reportBtn = document.getElementById('mockReportBtn');
-      if (reportBtn) reportBtn.style.display = 'inline-block';
+      var micBtn2 = document.getElementById('mockMicBtn');
+      if (micBtn2) micBtn2.style.display = 'none';
+      showMockStatus('面试结束');
+      var reportBtn2 = document.getElementById('mockReportBtn');
+      if (reportBtn2) reportBtn2.style.display = 'inline-block';
+      // 退出按钮
+      var exitBtn = document.getElementById('mockExitBtn');
+      if (!exitBtn) {
+        exitBtn = document.createElement('button');
+        exitBtn.id = 'mockExitBtn';
+        exitBtn.textContent = '← 退出';
+        exitBtn.className = 'btn';
+        exitBtn.style.marginLeft = '8px';
+        exitBtn.onclick = function(){ resetMock(); };
+        var btnRow = endBtn.parentNode;
+        if (btnRow) btnRow.appendChild(exitBtn);
+      }
+      if (exitBtn) exitBtn.style.display = 'inline-block';
     } else {
       var nextBtn = document.getElementById('mockNextBtn');
       if (!nextBtn) {
@@ -271,7 +293,10 @@ function renderMockReport(report) {
     html += '<h4>💡 提升建议</h4><p>' + escapeHtml(report.suggestion) + '</p>';
   }
 
-  html += '<button class="btn" onclick="resetMock()" style="margin-top:16px;">🔄 重新开始</button>';
+  html += '<div style="display:flex;gap:8px;margin-top:16px;">';
+  html += '<button class="btn" onclick="resetMock()">← 退出</button>';
+  html += '<button class="btn btn-primary" onclick="resetMock()">🔄 重新开始</button>';
+  html += '</div>';
   html += '</div>';
 
   document.getElementById('mockReportPanel').innerHTML = html;

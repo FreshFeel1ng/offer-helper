@@ -411,9 +411,12 @@ function stopMockMic() {
 /* ===== 历史记录 ===== */
 function loadMockHistory() {
   fetch('/api/mock/list?limit=10').then(function(r){ return r.json(); }).then(function(d){
-    if (!d.ok || !d.data.length) return;
     var listEl = document.getElementById('mockHistory');
     if (!listEl) return;
+    if (!d.ok || !d.data.length) {
+      listEl.innerHTML = '';
+      return;
+    }
     var html = '<h4>📜 过往记录</h4><div class="mock-history-list">';
     d.data.forEach(function(item){
       var date = item.created_at ? item.created_at.substring(0, 16).replace('T', ' ') : '';

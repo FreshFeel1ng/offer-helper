@@ -216,17 +216,20 @@ function mockNextQuestion() {
 }
 
 function submitMockAnswer() {
+  if (mockState !== 'interviewing') return;
   var input = document.getElementById('mockAnswerInput');
   var text = input.value.trim();
   if (!text) return;
-  if (!mockWs || mockState !== 'interviewing') return;
+  if (!mockWs || mockWs.readyState !== WebSocket.OPEN) return;
+
+  mockState = 'submitting';
+  input.disabled = true;
+  document.getElementById('mockAnswerBtn').disabled = true;
 
   mockWs.send(JSON.stringify({
     type: 'answer',
     payload: { text: text }
   }));
-  input.disabled = true;
-  document.getElementById('mockAnswerBtn').disabled = true;
 }
 
 function mockSkip() {
@@ -309,21 +312,39 @@ function toggleMockMic() {
 
   var micBtn = document.getElementById('mockMicBtn');
   var answerInput = document.getElementById('mockAnswerInput');
+  var transcriptFinal = '';
+  var transcriptInterim = '';
 
   mockRecognition.onstart = function() {
     mockIsListening = true;
     micBtn.textContent = '🔴 停止';
     micBtn.style.background = '#ef4444';
+    transcriptFinal = '';
+    transcriptInterim = '';
     showMockStatus('🎤 正在聆听... 说完点按钮停止');
   };
 
   mockRecognition.onresult = function(event) {
-    var transcript = '';
+    var interim = '';
+    var final = '';
     for (var i = event.resultIndex; i < event.results.length; i++) {
-      transcript += event.results[i][0].transcript;
+      if (event.results[i].isFinal) {
+        final += event.results[i][0].transcript;
+      } else {
+        interim += event.results[i][0].transcript;
+      }
     }
-    answerInput.value = transcript;
-    showMockStatus('🎤 聆听中: ' + transcript.substring(0, 50) + (transcript.length > 50 ? '...' : ''));
+    transcriptFinal += final;
+    transcriptInterim = interim;
+
+    var currentText = answerInput.value;
+    // 如果输入框已有旧内容，拼接时加空格
+    var prefix = currentText ? currentText + ' ' : '';
+    // 只用最新的完整内容更新
+    if (final || interim) {
+      answerInput.value = prefix + transcriptFinal + transcriptInterim;
+    }
+    showMockStatus('🎤 聆听中... (' + (transcriptFinal + transcriptInterim).length + '字)');
   };
 
   mockRecognition.onerror = function(event) {
@@ -338,10 +359,10 @@ function toggleMockMic() {
     mockIsListening = false;
     micBtn.textContent = '🎤';
     micBtn.style.background = '';
-    if (!answerInput.value) {
+    if (!answerInput.value.trim()) {
       showMockStatus('未识别到内容，请重试');
     } else {
-      showMockStatus('✅ 识别完成，如需修改可编辑后手动提交');
+      showMockStatus('✅ 识别完成 (' + (transcriptFinal + transcriptInterim).length + '字)，可编辑后手动提交');
     }
   };
 

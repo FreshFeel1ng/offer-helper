@@ -1,0 +1,588 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BOSS直聘自动化控制台</title>
+  <link rel="stylesheet" href="/static/css/style.css?v=2">
+</head>
+<body>
+<div class="app">
+    <nav class="sidebar sidebar-nav" id="sideNav">
+      <a class="active" data-tab="search"><span class="icon">🔍</span><span>岗位搜索</span></a>
+      <a data-tab="applications"><span class="icon">📋</span><span>投递记录</span></a>
+      <a data-tab="chat"><span class="icon">💬</span><span>聊天</span><span class="badge-count" id="navUnread" style="display:none;">0</span></a>
+      <a data-tab="wechat"><span class="icon">📱</span><span>微信记录</span></a>
+      <a data-tab="transfer"><span class="icon">🔔</span><span>转人工</span><span class="badge-count" id="navTransfer" style="display:none;">0</span></a>
+      <a data-tab="settings"><span class="icon">⚙</span><span>设置</span></a>
+      <a data-tab="agent"><span class="icon">🤖</span><span>AI Agent</span></a>
+      <a data-tab="kb"><span class="icon">📚</span><span>知识库</span></a>
+      <a data-tab="qa-ask"><span class="icon">💬</span><span>知识库问答</span></a>
+      <a data-tab="review"><span class="icon">📊</span><span>面试回顾</span></a>
+      <a data-tab="assistant"><span class="icon">🎙</span><span>AI面试</span><span class="dot off" id="assistantDot" style="margin-left:auto;"></span></a>
+    </nav>
+  <main class="main">
+    <div class="main-header">
+      <h2 id="pageTitle">岗位搜索</h2>
+      <div class="header-meta">
+        <span id="metaTime"></span>
+        <span class="sep">·</span>
+        <span id="metaJobs">0 待投递</span>
+      </div>
+      <div class="header-actions">
+        <button class="btn btn-success btn-sm" id="btnStart" onclick="startSystem()">启动浏览器</button>
+        <button class="btn btn-danger btn-sm" id="btnStop" onclick="stopSystem()" disabled>停止</button>
+      </div>
+    </div>
+
+    <div class="tab-content">
+
+    <!-- Tab 1: Search -->
+    <div class="tab active" id="tab-search">
+      <div class="search-shell" id="searchShell">
+        <div class="search-row">
+          <div class="search-field grow">
+            <label class="search-label">关键词</label>
+            <input type="text" id="searchKeyword" placeholder="搜索关键词..." value="" class="search-input">
+          </div>
+          <div class="search-field">
+            <label class="search-label">城市</label>
+            <select id="searchCity" class="search-select">
+              <optgroup label="山东省"><option value="济南">济南</option><option value="青岛">青岛</option><option value="淄博" selected>淄博</option><option value="潍坊">潍坊</option><option value="烟台">烟台</option><option value="济宁">济宁</option><option value="临沂">临沂</option><option value="泰安">泰安</option><option value="威海">威海</option><option value="东营">东营</option><option value="滨州">滨州</option><option value="菏泽">菏泽</option><option value="枣庄">枣庄</option><option value="日照">日照</option><option value="聊城">聊城</option><option value="德州">德州</option></optgroup>
+              <optgroup label="一线城市"><option value="北京">北京</option><option value="上海">上海</option><option value="广州">广州</option><option value="深圳">深圳</option></optgroup>
+              <optgroup label="新一线"><option value="成都">成都</option><option value="杭州">杭州</option><option value="武汉">武汉</option><option value="南京">南京</option><option value="重庆">重庆</option><option value="西安">西安</option><option value="长沙">长沙</option><option value="天津">天津</option><option value="苏州">苏州</option><option value="郑州">郑州</option><option value="东莞">东莞</option><option value="沈阳">沈阳</option><option value="宁波">宁波</option><option value="昆明">昆明</option></optgroup>
+              <optgroup label="其他省会"><option value="合肥">合肥</option><option value="福州">福州</option><option value="厦门">厦门</option><option value="南昌">南昌</option><option value="贵阳">贵阳</option><option value="南宁">南宁</option><option value="太原">太原</option><option value="石家庄">石家庄</option><option value="哈尔滨">哈尔滨</option><option value="长春">长春</option><option value="兰州">兰州</option><option value="乌鲁木齐">乌鲁木齐</option><option value="呼和浩特">呼和浩特</option><option value="拉萨">拉萨</option><option value="西宁">西宁</option><option value="银川">银川</option><option value="海口">海口</option><option value="三亚">三亚</option></optgroup>
+              <option value="全国">全国</option>
+            </select>
+          </div>
+          <div class="search-field">
+            <label class="search-label">区/商圈</label>
+            <select id="searchDistrict" class="search-select" multiple size="1" title="按Ctrl多选">
+              <option value="">-- 全部 --</option>
+            </select>
+          </div>
+          <div class="search-actions">
+            <button class="btn btn-primary" id="btnSearch" onclick="doSearch()">🔍 搜索</button>
+            <button class="btn btn-success" onclick="batchSearch()">批量搜索</button>
+            <button class="btn btn-primary" onclick="batchApplyAll(1)">一键投递</button>
+            <button class="btn btn-ghost btn-sm" onclick="batchApplyAll(5)" title="多页扫描+跳过已发公司+跳过HR不活跃">翻5页 ▸</button>
+            <button class="btn btn-warning" id="btnSmartSend" onclick="openSmartSendModal()" title="按公司聚合+挑最高职级HR+批量投递">🎯 智能投递</button>
+          </div>
+        </div>
+        <div class="search-row">
+          <div class="search-field">
+            <label class="search-label">公司规模</label>
+            <div class="inline-group">
+              <select id="searchScale" class="search-select">
+                <option value="">不限</option>
+                <option value="301">0-20人</option>
+                <option value="302">20-99人</option>
+                <option value="303">100-499人</option>
+                <option value="304">500-999人</option>
+                <option value="305">1000-9999人</option>
+                <option value="306">10000人以上</option>
+              </select>
+              <select id="searchScaleMulti" class="search-select" multiple size="1" title="多选（Ctrl）" style="display:none;">
+                <option value="301">0-20人</option>
+                <option value="302">20-99人</option>
+                <option value="303">100-499人</option>
+                <option value="304">500-999人</option>
+                <option value="305">1000-9999人</option>
+                <option value="306">10000人以上</option>
+              </select>
+              <button class="btn btn-ghost btn-xs" id="btnScaleMulti" onclick="toggleScaleMulti()" title="单/多选切换">⇄</button>
+              <span id="scaleMultiActions" style="display:none;font-size:10px;gap:2px;align-items:center;">
+                <a href="javascript:void(0)" onclick="selectAllScale(true)" style="color:var(--accent);" title="全选规模">全</a>
+              </span>
+            </div>
+          </div>
+          <div class="search-field">
+            <label class="search-label">薪资</label>
+            <select id="searchSalary" class="search-select">
+              <option value="">不限</option>
+              <option value="402">3K以下</option>
+              <option value="403">3-5K</option>
+              <option value="404">5-10K</option>
+              <option value="405">10-20K</option>
+              <option value="406">20-50K</option>
+              <option value="407">50K以上</option>
+            </select>
+          </div>
+          <div class="search-field">
+            <label class="search-label">经验</label>
+            <select id="searchExperience" class="search-select">
+              <option value="">不限</option>
+              <option value="108">在校生</option>
+              <option value="102">应届生</option>
+              <option value="103">1年内</option>
+              <option value="104">1-3年</option>
+              <option value="105">3-5年</option>
+              <option value="106">5-10年</option>
+              <option value="107">10年以上</option>
+            </select>
+          </div>
+          <div class="search-field">
+            <label class="search-label">学历</label>
+            <select id="searchDegree" class="search-select">
+              <option value="">不限</option>
+              <option value="209">初中及以下</option>
+              <option value="208">中专/中技</option>
+              <option value="206">高中</option>
+              <option value="202">大专</option>
+              <option value="203">本科</option>
+              <option value="204">硕士</option>
+              <option value="205">博士</option>
+            </select>
+          </div>
+          <div class="search-field">
+            <label class="search-label">类型</label>
+            <select id="searchJobType" class="search-select">
+              <option value="">不限</option>
+              <option value="1">全职</option>
+              <option value="2">兼职</option>
+            </select>
+          </div>
+          <div class="search-field">
+            <label class="search-label">融资阶段</label>
+            <select id="searchStage" class="search-select">
+              <option value="">不限</option>
+              <option value="801">未融资</option>
+              <option value="802">天使轮</option>
+              <option value="803">A轮</option>
+              <option value="804">B轮</option>
+              <option value="805">C轮</option>
+              <option value="806">D轮及以上</option>
+              <option value="807">上市公司</option>
+              <option value="808">不需要融资</option>
+            </select>
+          </div>
+          <div class="search-field grow">
+            <label class="search-label">福利关键词</label>
+            <input type="text" id="searchWelfare" placeholder="如 五险一金 弹性工作" class="search-input">
+          </div>
+        </div>
+        <div class="search-row toggles">
+          <label class="toggle-pill" title="同一公司只投递一次">
+            <input type="checkbox" id="chkDedupCompany" checked>
+            <span class="toggle-track"><span class="toggle-thumb"></span></span>
+            <span class="toggle-label">公司去重</span>
+          </label>
+          <label class="toggle-pill" title="HR超过这么多天未活跃就跳过">
+            <input type="checkbox" id="chkFilterInactiveHr" checked>
+            <span class="toggle-track"><span class="toggle-thumb"></span></span>
+            <span class="toggle-label">跳过HR <input type="number" id="inactiveDays" value="7" min="1" max="60" class="toggle-num"> 天未活跃</span>
+          </label>
+          <span class="search-spacer"></span>
+          <span class="search-hint">💡 多选区/规模时按 Ctrl+点击</span>
+        </div>
+      </div>
+
+      <div class="keyword-panel">
+        <span>批量关键词</span>
+        <textarea id="setSearchKeywords" rows="2" placeholder="Python后端&#10;前端开发&#10;产品经理"></textarea>
+      </div>
+
+      <div id="searchStatus"></div>
+      <div id="funnelBar" class="funnel-grid" style="display:none;"></div>
+      <div class="jobs-grid" id="jobsGrid"><div class="empty" style="grid-column:1/-1;"><div class="empty-icon">🔍</div>点击搜索获取岗位</div></div>
+    </div>
+
+    <!-- Tab 2: Applications -->
+    <div class="tab" id="tab-applications">
+      <div class="stats-grid">
+        <div class="stat-card"><div class="num" id="statToday">0</div><div class="lbl">今日投递</div></div>
+        <div class="stat-card"><div class="num" id="statPending">0</div><div class="lbl">待投递</div></div>
+        <div class="stat-card"><div class="num" id="statReplied">0</div><div class="lbl">HR已回复</div></div>
+        <div class="stat-card"><div class="num" id="statLimit">15</div><div class="lbl">每日上限</div></div>
+      </div>
+      <div class="section" style="padding:16px 18px;">
+        <div style="display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap;">
+          <button class="btn btn-sm" onclick="loadApplications('')">全部</button>
+          <button class="btn btn-sm" onclick="loadApplications('pending')">待投递</button>
+          <button class="btn btn-sm" onclick="loadApplications('applied')">已投递</button>
+          <button class="btn btn-sm" onclick="loadApplications('replied')">已回复</button>
+          <button class="btn btn-sm" onclick="loadShortlists()">收藏</button>
+          <button class="btn btn-sm btn-primary" onclick="batchApplyPending()" style="margin-left:auto;">一键投递待投递</button>
+        </div>
+        <div id="applyProgress"></div>
+        <div class="table-wrap">
+          <table><thead><tr><th>岗位</th><th>公司</th><th>薪资</th><th>城市</th><th>状态</th><th>操作</th></tr></thead><tbody id="appTableBody"><tr><td colspan="6" class="empty">暂无数据</td></tr></tbody></table>
+        </div>
+        <div class="pagination" id="appPagination"></div>
+      </div>
+    </div>
+
+    <!-- Tab 3: Chat -->
+    <div class="tab" id="tab-chat">
+      <div class="chat-container">
+        <div class="chat-list" id="conversationList"><div class="empty"><div class="empty-icon">💬</div>暂无会话</div></div>
+        <div class="chat-pane">
+          <div class="chat-header" id="chatHeader">
+            <div class="header-left">
+              <div class="info">
+                <div class="name"><span class="status-dot"></span>选择会话</div>
+                <div class="company">点击左侧会话开始查看</div>
+              </div>
+            </div>
+            <div class="header-right">
+              <button class="btn btn-sm btn-ghost" onclick="navigateBrowserToChat()">浏览器打开</button>
+              <button class="btn btn-sm" id="btnAutoReplyToggle" onclick="toggleAutoReply()" disabled>暂停AI</button>
+              <button class="btn btn-sm btn-primary" id="btnManualSend" onclick="sendManualMessage()" disabled>发送</button>
+            </div>
+          </div>
+          <div class="chat-messages" id="chatMessages"><div class="empty"><div class="empty-icon">💭</div>选择一个会话查看消息</div></div>
+          <div class="chat-input-area"><textarea id="chatInput" placeholder="输入消息..." rows="1" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendManualMessage();}"></textarea></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab 4: Wechat -->
+    <div class="tab" id="tab-wechat">
+      <div class="section" style="padding:18px 20px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+          <h3 style="margin:0;font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--text-3);">已获取的 HR 微信</h3>
+          <button class="btn btn-sm" onclick="loadWechatExchanges()">刷新</button>
+        </div>
+        <div id="wechatExchangesList"><div class="empty"><div class="empty-icon">📱</div>暂无微信记录</div></div>
+      </div>
+    </div>
+
+    <!-- Tab 5: Transfer Requests -->
+    <div class="tab" id="tab-transfer">
+      <div class="section" style="padding:18px 20px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+          <h3 style="margin:0;font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--text-3);">HR 要求转人工的会话</h3>
+          <button class="btn btn-sm" onclick="loadTransferRequests()">刷新</button>
+        </div>
+        <div id="transferRequestsList"><div class="empty"><div class="empty-icon">🔔</div>暂无转人工请求</div></div>
+      </div>
+    </div>
+
+    <!-- Tab 6: Settings -->
+    <div class="tab" id="tab-settings">
+      <div class="section"><h3>AI 模型配置</h3>
+        <div class="setting-row"><label>平台</label><select id="setAIPlatform" onchange="onPlatformChange()"><option value="">-- 选择平台 --</option><option value="deepseek">DeepSeek</option><option value="openrouter">OpenRouter</option><option value="mimo">小米MiMo</option><option value="custom">自定义</option></select></div>
+        <div class="setting-row"><label>API Key</label><input type="password" id="setAIApiKey" placeholder="输入API Key"><span id="aiKeyStatus" style="font-size:11px;margin-left:4px;"></span></div>
+        <div class="setting-row"><label>Base URL</label><input type="text" id="setAIBaseUrl" placeholder="自动填充"></div>
+        <div class="setting-row"><label>模型</label><input type="text" id="setAIModel" list="modelList" placeholder="选择或输入模型名" style="flex:1;"><datalist id="modelList"></datalist></div>
+        <div style="font-size:11px;color:var(--text-3);margin-top:4px;font-family:var(--mono);">选择平台后自动填充Base URL和可选模型列表</div>
+        <div class="setting-row" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);"><label>MinerU API Token</label><input type="password" id="setMineruToken" placeholder="https://mineru.net 申请 Token，用于精准 PDF 简历解析" style="flex:1;"><button type="button" class="btn btn-sm" onclick="var el=document.getElementById('setMineruToken');el.type=el.type==='password'?'text':'password';" style="font-size:11px;">👁</button></div>
+        <div style="font-size:11px;color:var(--text-3);margin-top:2px;">可选。填写后 PDF 简历使用 MinerU 高精度解析，不填则用本地 PyMuPDF 解析。</div>
+        <div class="setting-row" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);"><label>硅基流动 API Key</label><input type="text" id="setSiliconflowKey" placeholder="用于 BGE-M3 向量嵌入，可选" style="flex:1;"></div>
+        <div style="font-size:11px;color:var(--text-3);margin-top:2px;">可选。填写后启用向量 RAG 检索（需要 Milvus localhost:19530），简历匹配更精准。</div>
+        <div class="setting-row" style="margin-top:10px;"><label>嵌入模型</label><select id="setEmbeddingModel" style="flex:1;padding:8px;background:var(--bg-card);border:1px solid var(--border);color:var(--text);border-radius:6px;font-size:13px;"><option value="" style="background:#1a1a2e;color:#fafafa;">BAAI/bge-m3 (默认)</option><option value="Pro/BAAI/bge-m3" style="background:#1a1a2e;color:#fafafa;">Pro/BAAI/bge-m3</option><option value="BAAI/bge-large-zh-v1.5" style="background:#1a1a2e;color:#fafafa;">BAAI/bge-large-zh-v1.5</option><option value="netease-youdao/bce-embedding-base_v1" style="background:#1a1a2e;color:#fafafa;">bce-embedding-base</option></select></div>
+        <div class="setting-row" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);"><label>使用本地模型</label><select id="setUseLocalModel"><option value="false">关闭（使用平台模型）</option><option value="true">开启（使用 Ollama 本地模型）</option></select></div>
+        <div style="font-size:11px;color:var(--text-3);margin-top:2px;">开启后将跳过云端 API，直接使用本地 Ollama 模型进行面试。适用于无网络或想节省 API 费用的场景。本地模型知识面窄，会启用 RAG 知识库增强。</div>
+      </div>
+
+      <div class="section"><h3>个人资料</h3>
+        <div class="setting-row"><label>所在城市</label><input type="text" id="setLocation" placeholder="如：深圳、北京、远程"></div>
+        <div class="setting-row"><label>微信号</label><input type="text" id="setWechat" placeholder="AI 会在合适时机发给 HR"></div>
+        <div class="setting-row"><label>简历摘要</label><textarea id="setResume" placeholder="你的技能、项目经验……  AI 会在聊天中引用这些信息" rows="3"></textarea></div>
+      </div>
+
+      <div class="section"><h3>招呼语</h3>
+        <div class="setting-row"><label>模式</label><select id="setGreetingMode" onchange="toggleSmartPrompt()"><option value="template">固定模板</option><option value="smart">智能（AI 读 JD 生成个性化招呼语）</option></select></div>
+        <div class="setting-row"><label>招呼语</label><textarea id="setGreeting" placeholder="{job_title} 会被替换为实际岗位名">您好！看到贵司在招{job_title}，挺感兴趣的。PS：正在和你聊天的这个AI工具是我自己开发的——就当是我的技术名片了</textarea></div>
+        <div id="smartPromptRow" class="setting-row" style="display:none"><label>智能跟进 Prompt</label><textarea id="setSmartGreetingPrompt" rows="4" placeholder="留空使用默认" style="width:100%;"></textarea></div>
+      </div>
+
+      <div class="section"><h3>高级设置</h3>
+        <a href="javascript:void(0)" onclick="document.getElementById('advancedSettings').style.display=document.getElementById('advancedSettings').style.display==='none'?'block':'none';this.textContent=document.getElementById('advancedSettings').style.display==='none'?'展开 ▼':'收起 ▲'" style="font-size:12px;color:var(--accent);">展开 ▼</a>
+        <div id="advancedSettings" style="display:none;margin-top:12px;">
+
+          <h4 style="font-size:13px;margin:12px 0 6px;color:var(--text-2);">频率限制</h4>
+          <div class="setting-row"><label>每日投递上限</label><input type="number" id="setDailyLimit" value="15" min="1" max="30"></div>
+          <div class="setting-row"><label>回复间隔(秒)</label><div style="display:flex;gap:6px;flex:1;align-items:center;"><input type="number" id="setMinDelay" value="30" min="10" max="300" style="flex:1;"><span style="color:var(--text-3);">—</span><input type="number" id="setMaxDelay" value="120" min="20" max="600" style="flex:1;"></div></div>
+          <h4 style="font-size:13px;margin:12px 0 6px;color:var(--text-2);">智能过滤</h4>
+          <div class="setting-row"><label>HR 不活跃跳过</label><div style="display:flex;gap:6px;align-items:center;"><select id="setFilterInactiveHr"><option value="true">开启</option><option value="false">关闭</option></select><span style="font-size:11px;color:var(--text-3);">阈值</span><input type="number" id="setMaxHrInactiveDays" value="7" min="1" max="60" style="width:50px;"><span style="font-size:11px;color:var(--text-3);">天</span></div></div>
+          <div class="setting-row"><label>公司去重</label><select id="setDedupByDefault"><option value="true">开启</option><option value="false">关闭</option></select></div>
+          <h4 style="font-size:13px;margin:12px 0 6px;color:var(--text-2);">回复规则</h4>
+          <div class="setting-row"><label>自动回复</label><select id="setAutoReply"><option value="true">开启</option><option value="false">关闭</option></select></div>
+          <div class="setting-row"><label>回复风格</label><select id="setStyle"><option value="professional">专业</option><option value="casual">轻松</option><option value="enthusiastic">热情</option></select></div>
+          <div class="setting-row"><label>会话冷却(秒)</label><input type="number" id="setConversationCooldown" value="60" min="10" max="600"></div>
+          <div class="setting-row"><label>系统 Prompt</label><textarea id="setReplyRules" rows="4" placeholder="留空使用默认规则" style="width:100%;"></textarea></div>
+          <h4 style="font-size:13px;margin:12px 0 6px;color:var(--text-2);">调试</h4>
+          <div class="setting-row"><label>LLM 上下文日志</label><select id="setDebugLlmContext"><option value="false">关闭</option><option value="true">开启</option></select><span style="font-size:10px;color:var(--text-3);margin-left:4px;">开启后每次AI调用会在服务端控制台打印完整上下文</span></div>
+        </div>
+      </div>
+
+      <div class="section"><h3>系统</h3>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;">
+          <button class="btn btn-primary" onclick="saveSettings()">保存设置</button>
+          <button class="btn btn-sm" onclick="doRelogin()">重新扫码登录</button>
+          <span id="sessionStatus" style="font-size:10.5px;color:var(--text-3);line-height:26px;font-family:var(--mono);"></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab: AI Agent -->
+    <div class="tab" id="tab-agent">
+      <div class="agent-shell">
+        <div style="font-size:13px;color:var(--text-2);line-height:1.6;">
+          输入求职目标，AI Agent 会自主决策：<b>搜索岗位</b> → <b>分析JD匹配度</b> → <b>筛选</b> → <b>投递</b> → <b>汇报结果</b>。
+          每步进度实时推送，你可以观察 AI 的思考过程。
+        </div>
+
+        <div class="agent-input-row">
+          <div class="grow">
+            <label>求职目标</label>
+            <textarea id="agentGoal" rows="2" placeholder="例：帮我在广州找5个Python后端实习岗位，要求薪资12k以上，公司规模100人以上，分析JD匹配度后投递匹配度>70的"></textarea>
+          </div>
+        </div>
+        <div class="agent-input-row">
+          <div class="max-steps">
+            <label>最大步数</label>
+            <input type="number" id="agentMaxSteps" value="12" min="3" max="30">
+          </div>
+          <div style="display:flex;align-items:flex-end;gap:8px;">
+            <button class="agent-submit-btn" id="agentSubmitBtn" onclick="submitAgentGoal()">▶ 启动 Agent</button>
+            <button class="btn btn-sm" id="agentStopBtn" onclick="stopAgent()" style="display:none;" disabled>停止</button>
+          </div>
+        </div>
+
+        <div class="agent-running-indicator" id="agentRunning" style="display:none;">
+          <span class="pulse"></span> Agent 正在执行...
+        </div>
+
+        <label style="font-size:12px;color:var(--text-3);margin-top:8px;">执行日志</label>
+        <div class="agent-log" id="agentLog">
+          <div style="color:var(--text-3);font-size:13px;text-align:center;padding:30px 0;">输入目标后点击启动，Agent 的每一步思考和操作都会实时显示在这里</div>
+        </div>
+
+        <div class="agent-summary" id="agentSummary">
+          <h4>📋 执行结果</h4>
+          <div class="summary-text" id="agentSummaryText"></div>
+          <div class="milestones" id="agentMilestones"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab: 知识库管理 -->
+    <div class="tab" id="tab-kb">
+      <div class="section"><h3>📚 知识库批量导入</h3>
+        <div style="font-size:12px;color:var(--text-2);line-height:1.6;margin-bottom:12px;">
+          支持两种导入模式。导入后会为每题自动生成 embedding 向量，用于面试时的语义检索。
+        </div>
+        <div class="setting-row"><label>分类</label><select id="kbCategory">
+          <option value="RAG">RAG</option><option value="Agent">Agent</option>
+          <option value="大模型">大模型</option><option value="工程化">工程化</option>
+          <option value="Python">Python</option>
+          <option value="通用">通用</option>
+        </select></div>
+        <div class="setting-row"><label>难度</label><select id="kbDifficulty">
+          <option value="medium">medium</option><option value="easy">easy</option><option value="hard">hard</option>
+        </select></div>
+        <div class="setting-row"><label>技能标签</label><input type="text" id="kbSkills" placeholder="逗号分隔，如 RAG,embedding,检索" style="flex:1;"></div>
+
+        <div style="display:flex;gap:8px;margin:12px 0;">
+          <button class="btn btn-sm" id="btnKbModeQuestions" onclick="switchKbMode('questions')" style="background:var(--accent);color:#fff;">📝 仅问题</button>
+          <button class="btn btn-sm" id="btnKbModePairs" onclick="switchKbMode('pairs')">📋 问题+答案</button>
+        </div>
+
+        <div id="kbModeQuestions">
+          <div class="setting-row"><label>问题列表</label></div>
+          <textarea id="kbQuestionsText" rows="10" placeholder="每行一个面试题，LLM 会自动生成答案（单次最多 50 题）&#10;&#10;例：&#10;RAG系统中chunk大小如何选择？&#10;向量数据库选型要考虑哪些因素？&#10;如何处理RAG中的多轮对话上下文？" style="width:100%;font-family:var(--mono);font-size:12px;"></textarea>
+          <div class="setting-row" style="font-size:11px;color:var(--text-3);margin-top:2px;">每行一个问题，LLM 会自动为每题生成参考答案后写入知识库。</div>
+        </div>
+
+        <div id="kbModePairs" style="display:none;">
+          <div class="setting-row"><label>Q&A 文本</label></div>
+          <textarea id="kbPairsText" rows="12" placeholder="支持格式（单次最多 50 题）：&#10;&#10;格式1 — Q:问题 A:答案&#10;Q: RAG的核心流程是什么？&#10;A: 核心流程包括文档分块、向量化、检索、生成四个步骤...&#10;&#10;格式2 — 问：问题 答：答案&#10;问：什么是向量数据库？&#10;答：向量数据库是...&#10;&#10;格式3 — --- 分隔&#10;什么是embedding？&#10;embedding是将文本映射到...&#10;---&#10;向量检索和关键词检索有什么区别？&#10;区别在于..." style="width:100%;font-family:var(--mono);font-size:12px;"></textarea>
+          <div class="setting-row" style="font-size:11px;color:var(--text-3);margin-top:2px;">支持 Q:...A:... / 问：...答：... / --- 分隔三种格式。</div>
+        </div>
+
+        <div style="display:flex;gap:8px;align-items:center;margin-top:12px;">
+          <button class="btn btn-primary" id="btnKbImport" onclick="doKbImport()">📥 导入知识库</button>
+          <span id="kbImportStatus" style="font-size:12px;color:var(--text-3);"></span>
+        </div>
+        <div id="kbImportResult" style="margin-top:8px;font-size:12px;"></div>
+      </div>
+
+      <div class="section"><h3>📊 知识库统计</h3>
+        <div id="kbStats" style="font-size:12px;color:var(--text-3);">点击刷新查看...</div>
+        <button class="btn btn-sm" onclick="loadKbStats()" style="margin-top:6px;">🔄 刷新统计</button>
+      </div>
+
+    </div>
+
+    <!-- Tab: 知识库问答 -->
+    <div class="tab" id="tab-qa-ask">
+      <div class="section">
+        <h3>💬 知识库问答</h3>
+        <p style="font-size:11px;color:var(--text-3);margin-bottom:12px;">
+          基于 RAG 检索增强生成，多路召回 + 融合排序，检索知识库中的面试题并给出答案
+        </p>
+
+        <!-- 输入区 -->
+        <div style="display:flex;gap:8px;margin-bottom:16px;">
+          <input id="qaAskInput" type="text" placeholder="输入技术问题，如：RAG 和微调有什么区别？"
+                 style="flex:1;padding:10px 12px;border:1px solid var(--border);border-radius:6px;
+                        background:var(--bg);color:var(--text);font-size:14px;"
+                 onkeydown="if(event.key==='Enter')qaAsk()">
+          <button class="btn btn-primary" onclick="qaAsk()" style="white-space:nowrap;padding:10px 20px;">
+            🔍 提问
+          </button>
+        </div>
+
+        <!-- 加载动画 -->
+        <div id="qaAskLoading" style="display:none;text-align:center;padding:24px;">
+          <div style="display:inline-flex;gap:6px;align-items:center;font-size:13px;color:var(--text-2);">
+            <span class="spinner" style="width:16px;height:16px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;display:inline-block;animation:spin 0.6s linear infinite;"></span>
+            <span id="qaAskLoadingText">检索中...</span>
+          </div>
+          <div style="margin-top:8px;font-size:11px;color:var(--text-3);" id="qaAskLoadingDetail"></div>
+        </div>
+
+        <!-- 结果区 -->
+        <div id="qaAskResult" style="display:none;">
+          <!-- 一问一答 -->
+          <div style="margin-bottom:12px;">
+            <div style="font-size:11px;color:var(--text-3);margin-bottom:4px;display:flex;gap:8px;align-items:center;">
+              <span id="qaAskQ"></span>
+              <span id="qaAskBadge" style="font-size:10px;padding:2px 6px;border-radius:4px;"></span>
+            </div>
+            <div id="qaAskA" style="font-size:14px;line-height:1.7;padding:12px;background:var(--bg);border-radius:8px;border-left:3px solid var(--accent);"></div>
+          </div>
+
+          <!-- 检索详情 -->
+          <details id="qaAskDetail" style="margin-bottom:12px;font-size:12px;">
+            <summary style="cursor:pointer;color:var(--text-2);font-weight:500;">🔬 检索链路详情</summary>
+            <div style="margin-top:8px;padding:10px;background:var(--bg);border-radius:6px;font-family:var(--mono);font-size:11px;color:var(--text-2);line-height:1.8;">
+              <div><b>来源层:</b> <span id="qaDetailLayer">-</span></div>
+              <div><b>话题:</b> <span id="qaDetailTopic">-</span></div>
+              <div><b>匹配题目:</b> <span id="qaDetailMatched">-</span></div>
+              <div><b>置信度:</b> <span id="qaDetailConfidence">-</span></div>
+              <div><b>改写后查询:</b> <span id="qaDetailRewritten">-</span></div>
+              <div><b>召回通道:</b> <span id="qaDetailChannels">-</span></div>
+              <div><b>融合候选:</b> <span id="qaDetailFusion">-</span></div>
+              <div><b>耗时拆解:</b> <span id="qaDetailTiming">-</span></div>
+            </div>
+          </details>
+
+          <!-- 相关问题 -->
+          <div id="qaAskRelated" style="display:none;">
+            <div style="font-size:11px;color:var(--text-3);margin-bottom:6px;">🔗 相关问题</div>
+            <div id="qaAskRelatedList" style="display:flex;flex-wrap:wrap;gap:6px;"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab: 面试回顾 -->
+    <div class="tab" id="tab-review">
+      <div class="section"><h3>📊 面试回顾</h3>
+        <p style="font-size:11px;color:var(--text-3);margin-bottom:8px;">展示历史面试的评分、弱项分析和类别表现</p>
+        <div id="reviewDashboard">
+          <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;">
+            <button class="btn btn-sm btn-primary" onclick="loadReviewDashboard()">🔄 刷新数据</button>
+            <span id="reviewLoading" style="font-size:11px;color:var(--text-3);display:none;">加载中...</span>
+          </div>
+          <div id="reviewSummary" style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:12px;"></div>
+          <div id="reviewCategoryBars" style="margin-bottom:12px;"></div>
+          <div id="reviewWeakList" style="font-size:12px;"></div>
+          <div id="reviewSessions" style="margin-top:12px;font-size:12px;">
+            <div style="font-weight:500;margin-bottom:4px;">历史会话</div>
+            <div id="reviewSessionList" style="display:flex;flex-wrap:wrap;gap:4px;"></div>
+            <div id="reviewSessionDetail" style="margin-top:8px;padding:8px;background:var(--bg);border-radius:6px;display:none;"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab: AI面试助手 -->
+    <div class="tab" id="tab-assistant">
+      <div class="section">
+        <h3>AI 实时面试助手</h3>
+        <p style="font-size:11px;color:var(--text-3);margin-bottom:10px;">上传简历后启动服务，AI 将实时为面试问题生成回答</p>
+
+        <!-- 状态栏 -->
+        <div style="display:flex;gap:16px;align-items:center;margin-bottom:12px;flex-wrap:wrap;">
+          <span style="font-size:11px;color:var(--text-2);">服务状态:</span>
+          <span class="dot off" id="asstStatusDot"></span>
+          <span id="asstStatusText" style="font-size:12px;color:var(--text-3);">未启动</span>
+          <button class="btn btn-sm btn-primary" id="asstStartBtn" onclick="assistantStart()">启动服务</button>
+          <button class="btn btn-sm btn-danger" id="asstStopBtn" onclick="assistantStop()" style="display:none;">停止</button>
+          <span id="asstLoading" style="font-size:11px;color:var(--text-3);display:none;">...</span>
+        </div>
+
+        <!-- 简历上传 -->
+        <div style="margin-bottom:12px;padding:10px;background:var(--bg);border-radius:8px;">
+          <div style="font-size:12px;font-weight:500;margin-bottom:6px;">上传简历 (PDF/DOCX/TXT)</div>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <input type="file" id="resumeFile" accept=".pdf,.docx,.doc,.txt" style="font-size:11px;flex:1;" onchange="document.getElementById('resumeName').textContent=this.files[0]?.name||'未选择'">
+            <button class="btn btn-sm btn-primary" onclick="assistantUploadResume()">上传</button>
+          </div>
+          <div style="font-size:10px;color:var(--text-3);margin-top:4px;">已选: <span id="resumeName">未选择</span> | <span id="resumeStatus" style="color:var(--text-3);">未上传</span></div>
+        </div>
+
+        <!-- 系统音频捕获（腾讯会议等场景） -->
+        <div style="margin-bottom:12px;padding:10px;background:var(--bg);border-radius:8px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+            <span style="font-size:12px;font-weight:500;">捕获系统音频（腾讯会议 / Zoom）</span>
+            <div style="display:flex;gap:6px;align-items:center;">
+              <span id="asstSysAudioLabel" style="font-size:11px;color:var(--text-3);">未启用</span>
+              <button id="asstSysAudioBtn" class="btn btn-sm btn-primary" onclick="assistantToggleSysAudio()" style="font-size:11px;">开始捕获</button>
+            </div>
+          </div>
+          <div id="asstSysTranscript" style="min-height:24px;padding:4px 8px;background:var(--bg-card);border:1px solid var(--border);border-radius:4px;font-size:11px;color:var(--text-2);display:none;word-break:break-all;"></div>
+          <details style="margin-top:6px;font-size:10px;color:var(--text-3);cursor:pointer;">
+            <summary style="color:var(--accent);">VB-Cable 设置教程</summary>
+            <div style="padding:6px 0 0 12px;line-height:1.8;">
+              <div>1. 下载安装 VB-Cable，管理员运行 VBCABLE_Setup_x64.exe，重启</div>
+              <div>2. 腾讯会议 → 设置 → 音频 → 扬声器选 CABLE Input</div>
+              <div>3. Win+R → mmsys.cpl → 录制 → CABLE Output → 属性 → 侦听 → 勾选，选真实耳机</div>
+              <div>4. 点击下方麦克风按钮时，浏览器弹窗的麦克风选 CABLE Output</div>
+            </div>
+          </details>
+        </div>
+
+        <!-- 语音 + 文字输入 -->
+        <div style="margin-bottom:12px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+            <span style="font-size:12px;font-weight:500;">面试问答</span>
+            <div style="display:flex;gap:6px;align-items:center;">
+              <span id="asstMicLabel" style="font-size:11px;color:var(--text-3);">点击麦克风开始</span>
+              <button id="asstMicBtn" class="btn btn-sm btn-primary" onclick="assistantToggleMic()" style="width:36px;height:28px;font-size:14px;line-height:1;padding:0;" title="语音输入">🎤</button>
+            </div>
+          </div>
+          <!-- 实时转录文字 -->
+          <div id="asstTranscript" style="min-height:28px;padding:6px 10px;background:var(--bg-card);border:1px solid var(--border);border-radius:6px;font-size:12px;color:var(--text-2);margin-bottom:8px;display:none;"></div>
+          <!-- 备用文字输入 -->
+          <div style="display:flex;gap:8px;">
+            <input type="text" id="asstQuestion" placeholder="或手动输入问题..." style="flex:1;font-size:12px;padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg-card);color:var(--text);" onkeydown="if(event.key==='Enter')assistantAsk()">
+            <button class="btn btn-sm btn-primary" onclick="assistantAsk()">发送</button>
+          </div>
+        </div>
+
+        <!-- 回答展示区 -->
+        <div id="asstAnswerArea" style="max-height:400px;overflow-y:auto;font-size:12px;">
+          <div style="color:var(--text-3);padding:20px;text-align:center;">启动服务后，在此显示 AI 实时回答</div>
+        </div>
+
+        <!-- Token 用量 -->
+        <div id="asstTokenPanel" style="margin-top:12px;padding:10px;background:var(--bg);border-radius:8px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+            <span style="font-size:12px;font-weight:500;">📊 Token 用量 (7天)</span>
+            <button class="btn btn-sm" onclick="loadTokenStats()" style="font-size:10px;">🔄 刷新</button>
+          </div>
+          <div id="asstTokenStats" style="display:flex;gap:12px;flex-wrap:wrap;font-size:11px;">
+            <div><span style="color:var(--text-2);">总调用:</span> <span id="tokCalls">0</span>次</div>
+            <div><span style="color:var(--text-2);">总 Token:</span> <span id="tokTotal">0</span></div>
+            <div><span style="color:var(--text-2);">提示:</span> <span id="tokPrompt">0</span></div>
+            <div><span style="color:var(--text-2);">生成:</span> <span id="tokCompletion">0</span></div>
+            <div><span style="color:var(--accent);">均速:</span> <span id="tokTps">0</span> tok/s</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    </div>
+  </main>
+
+<script src="/static/js/app.js"></script>
+<script src="/static/js/smart-send.js"></script>
+<script src="/static/js/assistant.js"></script>
+</div>
+</body>
+</html>

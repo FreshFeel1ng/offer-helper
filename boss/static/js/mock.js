@@ -260,8 +260,14 @@ function mockSkip() {
 }
 
 function mockGetReport() {
-  if (!mockWs) return;
+  if (!mockWs || mockWs.readyState !== WebSocket.OPEN) return;
+  if (mockState === 'finished' || mockState === 'evaluating' || mockState === 'submitting') return;
+  mockState = 'evaluating';
   mockWs.send(JSON.stringify({ type: 'report' }));
+  var reportBtn = document.getElementById('mockReportBtn');
+  if (reportBtn) { reportBtn.disabled = true; reportBtn.textContent = '⏳ 生成中...'; }
+  var endBtn = document.getElementById('mockEndBtn');
+  if (endBtn) endBtn.disabled = true;
 }
 
 function renderMockReport(report) {

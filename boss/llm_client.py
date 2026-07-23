@@ -227,8 +227,10 @@ def llm_chat_deepseek(messages: list, system_prompt: Optional[str] = None, tempe
 
 def _log_token(model: str, source: str, prompt: int, completion: int, total: int, elapsed: float):
     """记录 token 用量到数据库"""
+    if total <= 0:
+        return
     try:
-        from boss.state import save_token_usage
+        from .state import save_token_usage
         save_token_usage(
             model=model,
             source=source,

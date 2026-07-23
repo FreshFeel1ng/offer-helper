@@ -12,7 +12,8 @@ import json
 import os
 import random
 import re
-import signal
+
+
 import subprocess
 import sys
 import time
@@ -2651,6 +2652,7 @@ async def assistant_start():
         _assistant_process = subprocess.Popen(
             [sys.executable, "-m", "uvicorn", "main:app", "--port", str(_ASSISTANT_PORT)],
             cwd=_ASSISTANT_DIR,
+            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0,
         )
         await asyncio.sleep(2)
         if _assistant_process.poll() is not None:
@@ -2668,7 +2670,7 @@ async def assistant_stop():
         return {"status": "not_running"}
     try:
         if _assistant_process.poll() is None:
-            _assistant_process.send_signal(signal.CTRL_BREAK_EVENT if sys.platform == "win32" else signal.SIGTERM)
+            _assistant_process.terminate()
             try:
                 _assistant_process.wait(timeout=5)
             except subprocess.TimeoutExpired:

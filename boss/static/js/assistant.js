@@ -280,12 +280,17 @@ async function loadTokenStats(){
   try {
     var r = await fetch('/api/llm-stats'); var d = await r.json();
     var s = d.summary || {};
-    document.getElementById('tokCalls').textContent = s.total_calls || 0;
-    document.getElementById('tokTotal').textContent = (s.total_tokens || 0).toLocaleString();
-    document.getElementById('tokPrompt').textContent = (s.total_prompt_tokens || 0).toLocaleString();
-    document.getElementById('tokCompletion').textContent = (s.total_completion_tokens || 0).toLocaleString();
-    document.getElementById('tokTps').textContent = s.avg_tps || 0;
-  } catch(e) {}
+    var elCalls = document.getElementById('tokCalls');
+    var elTotal = document.getElementById('tokTotal');
+    var elPrompt = document.getElementById('tokPrompt');
+    var elCompletion = document.getElementById('tokCompletion');
+    var elTps = document.getElementById('tokTps');
+    if(elCalls) elCalls.textContent = Number(s.total_calls) || 0;
+    if(elTotal) elTotal.textContent = (Number(s.total_tokens) || 0).toLocaleString();
+    if(elPrompt) elPrompt.textContent = (Number(s.total_prompt_tokens) || 0).toLocaleString();
+    if(elCompletion) elCompletion.textContent = (Number(s.total_completion_tokens) || 0).toLocaleString();
+    if(elTps) elTps.textContent = Number(s.avg_tps) || 0;
+  } catch(e) { console.error('loadTokenStats error:', e); }
 }
 
 document.addEventListener('DOMContentLoaded',()=>{

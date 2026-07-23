@@ -312,6 +312,7 @@ function toggleMockMic() {
 
   var micBtn = document.getElementById('mockMicBtn');
   var answerInput = document.getElementById('mockAnswerInput');
+  var originalText = '';
   var transcriptFinal = '';
   var transcriptInterim = '';
 
@@ -319,6 +320,7 @@ function toggleMockMic() {
     mockIsListening = true;
     micBtn.textContent = '🔴 停止';
     micBtn.style.background = '#ef4444';
+    originalText = answerInput.value.trim();
     transcriptFinal = '';
     transcriptInterim = '';
     showMockStatus('🎤 正在聆听... 说完点按钮停止');
@@ -337,13 +339,9 @@ function toggleMockMic() {
     transcriptFinal += final;
     transcriptInterim = interim;
 
-    var currentText = answerInput.value;
-    // 如果输入框已有旧内容，拼接时加空格
-    var prefix = currentText ? currentText + ' ' : '';
-    // 只用最新的完整内容更新
-    if (final || interim) {
-      answerInput.value = prefix + transcriptFinal + transcriptInterim;
-    }
+    // 基准 = 本次识别前的原文 + 本次累积的识别结果
+    var sep = originalText ? ' ' : '';
+    answerInput.value = originalText + sep + transcriptFinal + transcriptInterim;
     showMockStatus('🎤 聆听中... (' + (transcriptFinal + transcriptInterim).length + '字)');
   };
 

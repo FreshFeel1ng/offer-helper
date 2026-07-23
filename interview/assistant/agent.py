@@ -56,6 +56,8 @@ class _TokenLogger(BaseCallbackHandler):
                 print(f"[LLM TOKEN] assistant/{config.llm_model}: {total_tok}t OK")
             except Exception as e:
                 print(f"[LLM TOKEN] assistant save failed: {e}")
+        else:
+            print(f"[LLM TOKEN] assistant/{config.llm_model}: 未获取到 token 用量 (usage={usage})")
 
         self._t0 = None
 

@@ -1143,21 +1143,27 @@ def get_token_stats(days: int = 7) -> dict:
     """获取最近 N 天的 Token 统计"""
     db = get_db()
     cur = db.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cur.execute(
-        """SELECT
-             COUNT(*) as total_calls,
-             COALESCE(SUM(total_tokens),0) as total_tokens,
-             COALESCE(SUM(prompt_tokens),0) as total_prompt_tokens,
-             COALESCE(SUM(completion_tokens),0) as total_completion_tokens,
-             COALESCE(ROUND(AVG(tokens_per_sec),1),0) as avg_tps,
-             COALESCE(ROUND(AVG(elapsed_ms),0),0) as avg_elapsed_ms
-           FROM token_usage
-           WHERE created_at >= CURRENT_DATE - INTERVAL '1 day' * %s""",
-        (days,),
-    )
-    row = cur.fetchone()
-    cur.close()
-    return dict(row) if row else {}
+    try:
+        cur.execute(
+            """SELECT
+                 COUNT(*) as total_calls,
+                 COALESCE(SUM(total_tokens),0) as total_tokens,
+                 COALESCE(SUM(prompt_tokens),0) as total_prompt_tokens,
+                 COALESCE(SUM(completion_tokens),0) as total_completion_tokens,
+                 COALESCE(ROUND(AVG(tokens_per_sec)::numeric, 1), 0) as avg_tps,
+                 COALESCE(ROUND(AVG(elapsed_ms)::numeric, 0), 0) as avg_elapsed_ms
+               FROM token_usage
+               WHERE created_at >= CURRENT_DATE - INTERVAL '1 day' * %s""",
+            (days,),
+        )
+        row = cur.fetchone()
+        db.commit()
+        return dict(row) if row else {}
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        cur.close()
 
 
 def list_token_usage(limit: int = 20) -> list:

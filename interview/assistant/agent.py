@@ -29,17 +29,25 @@ class _TokenLogger(BaseCallbackHandler):
     def on_llm_end(self, response, **kwargs):
         elapsed = time.time() - (self._t0 or time.time())
         usage = {}
+        # 新版 LangChain stream_usage=True 时存放在 llm_output
         if hasattr(response, 'llm_output') and response.llm_output:
-            usage = response.llm_output.get('token_usage', {})
+            usage = response.llm_output.get('token_usage', response.llm_output)
         if not usage and hasattr(response, 'response_metadata'):
             usage = response.response_metadata.get('token_usage', {})
         if not usage and hasattr(response, 'generations') and response.generations:
             gen = response.generations[0][0]
             if hasattr(gen, 'generation_info'):
                 usage = gen.generation_info or {}
+            # stream_usage 场景下 usage 可能在 message 的 usage_metadata 中
+            if not usage and hasattr(gen, 'message'):
+                msg = gen.message
+                if hasattr(msg, 'usage_metadata') and msg.usage_metadata:
+                    usage = msg.usage_metadata
+                elif hasattr(msg, 'response_metadata'):
+                    usage = msg.response_metadata.get('token_usage', {})
 
-        prompt_tok = usage.get('prompt_tokens', 0) or 0
-        completion_tok = usage.get('completion_tokens', 0) or 0
+        prompt_tok = usage.get('prompt_tokens', 0) or usage.get('input_tokens', 0) or 0
+        completion_tok = usage.get('completion_tokens', 0) or usage.get('output_tokens', 0) or 0
         total_tok = usage.get('total_tokens', 0) or (prompt_tok + completion_tok)
 
         if total_tok > 0:
@@ -160,6 +168,7 @@ class InterviewAgent:
             api_key=config.deepseek_api_key,
             base_url=config.deepseek_base_url,
             streaming=True,
+            stream_usage=True,
             callbacks=[token_logger],
         )
 

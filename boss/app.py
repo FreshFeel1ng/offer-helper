@@ -2649,6 +2649,7 @@ async def assistant_start():
         }
 
     try:
+        print(f"[面试助手] 正在启动子进程 (端口 {_ASSISTANT_PORT})...")
         _assistant_process = subprocess.Popen(
             [sys.executable, "-m", "uvicorn", "main:app", "--port", str(_ASSISTANT_PORT)],
             cwd=_ASSISTANT_DIR,
@@ -2656,9 +2657,12 @@ async def assistant_start():
         )
         await asyncio.sleep(2)
         if _assistant_process.poll() is not None:
+            print(f"[面试助手] ❌ 子进程启动后立即退出")
             return {"status": "failed", "detail": "子进程启动后立即退出"}
+        print(f"[面试助手] ✅ 子进程启动成功 (PID={_assistant_process.pid})")
         return {"status": "started", "port": _ASSISTANT_PORT}
     except Exception as e:
+        print(f"[面试助手] ❌ 启动失败: {e}")
         return {"status": "error", "detail": str(e)}
 
 
@@ -2670,15 +2674,19 @@ async def assistant_stop():
         return {"status": "not_running"}
     try:
         if _assistant_process.poll() is None:
+            print(f"[面试助手] 正在停止子进程 (PID={_assistant_process.pid})...")
             _assistant_process.terminate()
             try:
                 _assistant_process.wait(timeout=5)
             except subprocess.TimeoutExpired:
+                print(f"[面试助手] 子进程未响应, 强制终止...")
                 _assistant_process.kill()
                 _assistant_process.wait()
         _assistant_process = None
+        print(f"[面试助手] ✅ 子进程已停止")
         return {"status": "stopped"}
     except Exception as e:
+        print(f"[面试助手] ❌ 停止失败: {e}")
         return {"status": "error", "detail": str(e)}
 
 

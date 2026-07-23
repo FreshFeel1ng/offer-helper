@@ -51,9 +51,27 @@ def get_db() -> psycopg2.extensions.connection:
 
 
 def init_db():
-    """初始化数据库：插入默认设置（表已由用户手动创建）"""
+    """初始化数据库：建表 + 插入默认设置"""
     db = get_db()
     cur = db.cursor()
+
+    # 确保模拟面试表存在
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS mock_interviews (
+            id                  SERIAL PRIMARY KEY,
+            position            VARCHAR(128) NOT NULL DEFAULT '',
+            topic               VARCHAR(256) NOT NULL DEFAULT '',
+            difficulty          VARCHAR(16)  NOT NULL DEFAULT 'medium',
+            rounds              INTEGER      NOT NULL DEFAULT 0,
+            qa_json             JSONB        NOT NULL DEFAULT '[]',
+            score               INTEGER,
+            strengths           TEXT,
+            weaknesses          TEXT,
+            overall_evaluation  TEXT,
+            created_at          TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+        )
+    """)
+    db.commit()
 
     defaults = {
         "greeting_template": "您好！看到贵司在招{job_title}，很感兴趣。PS：正在和你聊天的这个AI工具是我自己开发的——就当是我的技术名片了",
@@ -1177,6 +1195,54 @@ def list_token_usage(limit: int = 20) -> list:
     rows = cur.fetchall()
     cur.close()
     return _rows_to_list(rows)
+
+
+# ── 模拟面试记录 ──
+
+def save_mock_interview(position: str, topic: str, difficulty: str,
+                        rounds: int, qa_json: str, score: int,
+                        strengths: str, weaknesses: str, overall_evaluation: str):
+    """保存模拟面试记录"""
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("""
+        INSERT INTO mock_interviews
+            (position, topic, difficulty, rounds, qa_json, score,
+             strengths, weaknesses, overall_evaluation)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        RETURNING id
+    """, (position, topic, difficulty, rounds, qa_json, score,
+          strengths, weaknesses, overall_evaluation))
+    row = cur.fetchone()
+    db.commit()
+    cur.close()
+    return row[0] if row else None
+
+
+def list_mock_interviews(limit: int = 20) -> list:
+    """最近 N 条模拟面试记录"""
+    db = get_db()
+    cur = db.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute("""
+        SELECT id, position, topic, difficulty, rounds, score,
+               strengths, weaknesses, overall_evaluation, created_at
+        FROM mock_interviews
+        ORDER BY created_at DESC
+        LIMIT %s
+    """, (limit,))
+    rows = cur.fetchall()
+    cur.close()
+    return _rows_to_list(rows)
+
+
+def get_mock_interview(mock_id: int) -> Optional[dict]:
+    """获取单条模拟面试详情（含完整 Q&A）"""
+    db = get_db()
+    cur = db.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute("SELECT * FROM mock_interviews WHERE id = %s", (mock_id,))
+    row = cur.fetchone()
+    cur.close()
+    return dict(row) if row else None
 
 
 # 启动时初始化

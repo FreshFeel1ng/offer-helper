@@ -156,6 +156,21 @@ CREATE TABLE IF NOT EXISTS token_usage (
     created_at        TIMESTAMPTZ   NOT NULL DEFAULT NOW()
 );
 
+-- 10. 模拟面试记录
+CREATE TABLE IF NOT EXISTS mock_interviews (
+    id                  SERIAL PRIMARY KEY,
+    position            VARCHAR(128) NOT NULL DEFAULT '',
+    topic               VARCHAR(256) NOT NULL DEFAULT '',
+    difficulty          VARCHAR(16)  NOT NULL DEFAULT 'medium',
+    rounds              INTEGER      NOT NULL DEFAULT 0,
+    qa_json             JSONB        NOT NULL DEFAULT '[]',
+    score               INTEGER,
+    strengths           TEXT,
+    weaknesses          TEXT,
+    overall_evaluation  TEXT,
+    created_at          TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+
 -- 初始默认设置
 INSERT INTO settings (key, value) VALUES
     ('greeting_template', '您好！看到贵司在招{job_title}，很感兴趣。PS：正在和你聊天的这个AI工具是我自己开发的——就当是我的技术名片了'),
@@ -172,5 +187,5 @@ INSERT INTO settings (key, value) VALUES
     ('resume_summary', ''),
     ('wechat_id', ''),
     ('search_keywords', ''),
-    ('default_city', '淄博')
+    ('default_city', '深圳')
 ON CONFLICT (key) DO NOTHING;

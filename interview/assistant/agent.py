@@ -7,6 +7,7 @@
 import time
 from typing import AsyncGenerator, Optional
 
+import tiktoken
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.output_parsers import StrOutputParser
@@ -68,6 +69,16 @@ class _TokenLogger(BaseCallbackHandler):
             print(f"[LLM TOKEN] assistant/{config.llm_model}: 未获取到 token 用量 (usage={usage})")
 
         self._t0 = None
+
+
+def _count_tokens(text: str, model: str = "gpt-4") -> int:
+    """用 tiktoken 估算文本 token 数。DeepSeek 兼容 OpenAI tokenizer。"""
+    try:
+        enc = tiktoken.encoding_for_model(model)
+    except Exception:
+        enc = tiktoken.get_encoding("cl100k_base")
+    return len(enc.encode(text))
+
 
 SYSTEM_PROMPT_TEMPLATE = """你是一个面试辅助 AI，帮助在面试中的候选人现场生成回答。
 
@@ -160,7 +171,8 @@ class InterviewAgent:
         language: str = "zh",
     ) -> AsyncGenerator[str, None]:
         """流式生成面试回答"""
-        token_logger = _TokenLogger()
+        import time as _time
+
         streaming_llm = ChatOpenAI(
             model=config.llm_model,
             temperature=config.temperature,
@@ -168,8 +180,6 @@ class InterviewAgent:
             api_key=config.deepseek_api_key,
             base_url=config.deepseek_base_url,
             streaming=True,
-            stream_usage=True,
-            callbacks=[token_logger],
         )
 
         prompt = ChatPromptTemplate.from_messages([
@@ -190,8 +200,7 @@ class InterviewAgent:
         else:
             print(f"[Agent] 简历知识库未加载")
 
-        full_response = ""
-        async for chunk in chain.astream({
+        input_vars = {
             "question": question,
             "chat_history": self.chat_history,
             "interviewType": interview_type,
@@ -200,9 +209,44 @@ class InterviewAgent:
             "questionCategory": classification.category.value,
             "answerStrategy": get_answer_strategy(classification.category),
             "resumeContext": resume_context if resume_context else "暂无候选人简历信息，请根据通用知识回答。",
-        }):
+        }
+
+        # 计算 prompt tokens (用 tiktoken 估算)
+        try:
+            prompt_tokens = _count_tokens(SYSTEM_PROMPT_TEMPLATE)
+            for msg in self.chat_history:
+                prompt_tokens += _count_tokens(str(msg.content))
+            for val in input_vars.values():
+                if isinstance(val, str):
+                    prompt_tokens += _count_tokens(val)
+        except Exception:
+            prompt_tokens = 0
+
+        t0 = _time.time()
+        full_response = ""
+        async for chunk in chain.astream(input_vars):
             full_response += chunk
             yield chunk
+
+        elapsed = _time.time() - t0
+
+        # 计算 completion tokens 并保存
+        try:
+            completion_tokens = _count_tokens(full_response)
+            total_tokens = prompt_tokens + completion_tokens
+            if total_tokens > 0:
+                from boss.state import save_token_usage
+                save_token_usage(
+                    model=config.llm_model,
+                    source="interview_assistant",
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    total_tokens=total_tokens,
+                    elapsed_ms=round(elapsed * 1000, 0),
+                )
+                print(f"[LLM TOKEN] assistant/{config.llm_model}: prompt={prompt_tokens} completion={completion_tokens} total={total_tokens} OK")
+        except Exception as e:
+            print(f"[LLM TOKEN] assistant save failed: {e}")
 
         # 保存到历史
         self.chat_history.append(HumanMessage(content=question))

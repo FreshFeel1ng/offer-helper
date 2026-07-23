@@ -310,12 +310,17 @@ function renderMockReport(report) {
 
 function resetMock() {
   if (mockWs) { try { mockWs.close(); } catch(e){} mockWs = null; }
+  stopMockMic();
   mockState = 'idle';
   document.getElementById('mockConfigPanel').style.display = 'block';
   document.getElementById('mockInterviewPanel').style.display = 'none';
   document.getElementById('mockReportPanel').style.display = 'none';
   document.getElementById('mockQA').innerHTML = '';
   document.getElementById('mockAnswerInput').value = '';
+  document.getElementById('mockAnswerInput').style.display = 'block';
+  var exitBtn = document.getElementById('mockExitBtn');
+  if (exitBtn) exitBtn.style.display = 'none';
+  showMockStatus('');
   loadMockHistory();
 }
 

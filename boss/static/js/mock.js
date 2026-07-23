@@ -303,8 +303,8 @@ function toggleMockMic() {
   var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   mockRecognition = new SR();
   mockRecognition.lang = 'zh-CN';
-  mockRecognition.interimResults = false;
-  mockRecognition.continuous = false;
+  mockRecognition.interimResults = true;
+  mockRecognition.continuous = true;
   mockRecognition.maxAlternatives = 1;
 
   var micBtn = document.getElementById('mockMicBtn');
@@ -312,17 +312,18 @@ function toggleMockMic() {
 
   mockRecognition.onstart = function() {
     mockIsListening = true;
-    micBtn.textContent = '🔴';
+    micBtn.textContent = '🔴 停止';
     micBtn.style.background = '#ef4444';
-    showMockStatus('正在聆听...');
+    showMockStatus('🎤 正在聆听... 说完点按钮停止');
   };
 
   mockRecognition.onresult = function(event) {
-    var transcript = event.results[0][0].transcript;
+    var transcript = '';
+    for (var i = event.resultIndex; i < event.results.length; i++) {
+      transcript += event.results[i][0].transcript;
+    }
     answerInput.value = transcript;
-    showMockStatus('已识别: ' + transcript);
-    // 自动提交
-    setTimeout(function(){ submitMockAnswer(); }, 500);
+    showMockStatus('🎤 聆听中: ' + transcript.substring(0, 50) + (transcript.length > 50 ? '...' : ''));
   };
 
   mockRecognition.onerror = function(event) {
@@ -330,12 +331,18 @@ function toggleMockMic() {
     micBtn.textContent = '🎤';
     micBtn.style.background = '';
     console.error('[Mock] Speech error:', event.error);
+    showMockStatus('语音识别出错，请重试');
   };
 
   mockRecognition.onend = function() {
     mockIsListening = false;
     micBtn.textContent = '🎤';
     micBtn.style.background = '';
+    if (!answerInput.value) {
+      showMockStatus('未识别到内容，请重试');
+    } else {
+      showMockStatus('✅ 识别完成，如需修改可编辑后手动提交');
+    }
   };
 
   mockRecognition.start();

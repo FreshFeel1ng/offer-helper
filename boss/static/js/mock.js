@@ -126,8 +126,14 @@ function handleMockMessage(msg) {
     interviewPanel.style.display = 'block';
     reportPanel.style.display = 'none';
     qaArea.innerHTML = '';
-    showMockStatus('已配置，点击「开始面试」出题');
-    document.getElementById('mockStartBtn').style.display = 'inline-block';
+    questionEl.textContent = '';
+    answerInput.style.display = 'block';
+    showMockStatus('点击「AI 出题」开始面试');
+    if (document.getElementById('mockStartBtn')) document.getElementById('mockStartBtn').style.display = 'inline-block';
+    document.getElementById('mockAnswerBtn').style.display = 'none';
+    if (micBtn) micBtn.style.display = 'none';
+    if (skipBtn) skipBtn.style.display = 'none';
+    if (endBtn) endBtn.style.display = 'none';
 
   } else if (type === 'question') {
     mockState = 'interviewing';
@@ -138,7 +144,10 @@ function handleMockMessage(msg) {
     if (roundEl) roundEl.textContent = '第 ' + payload.round + ' / ' + payload.total + ' 题';
     answerInput.value = '';
     answerInput.disabled = false;
+    answerInput.style.display = 'block';
     answerBtn.disabled = false;
+    answerBtn.style.display = 'inline-block';
+    if (document.getElementById('mockStartBtn')) document.getElementById('mockStartBtn').style.display = 'none';
     skipBtn.style.display = 'inline-block';
     if (micBtn) micBtn.style.display = 'inline-block';
     endBtn.style.display = 'inline-block';

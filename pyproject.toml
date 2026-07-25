@@ -7,7 +7,7 @@ name = "offer-helper"
 version = "0.1.0"
 description = "AI驱动的智能求职助手 · BOSS直聘自动化工具"
 readme = "README.md"
-license = { file = "LICENSE" }
+license = { text = "MIT" }
 requires-python = ">=3.10"
 authors = [{ name = "offer-helper" }]
 dependencies = [

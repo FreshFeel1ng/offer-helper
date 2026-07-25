@@ -206,8 +206,8 @@ def server_cmd(start, stop, port):
     import subprocess, os
 
     project_dir = os.path.dirname(os.path.dirname(__file__))
-    if not os.path.exists(os.path.join(project_dir, "boss_app.py")):
-        project_dir = os.environ.get("OFFERHELPER_PROJECT", r"D:\lake\jiaoben\job\")
+    if not os.path.exists(os.path.join(project_dir, "boss", "app.py")):
+        project_dir = os.environ.get("OFFERHELPER_PROJECT", os.path.dirname(os.path.dirname(__file__)))
 
     if start:
         cmd = ["python", os.path.join(project_dir, "boss_app.py"), "--port", str(port)]
@@ -231,10 +231,10 @@ def restart_cmd(port):
     import subprocess, os, time, urllib.request
 
     project_dir = os.path.dirname(os.path.dirname(__file__))
-    if not os.path.exists(os.path.join(project_dir, "boss_app.py")):
-        project_dir = os.environ.get("OFFERHELPER_PROJECT", r"D:\lake\jiaoben\job\")
+    if not os.path.exists(os.path.join(project_dir, "boss", "app.py")):
+        project_dir = os.environ.get("OFFERHELPER_PROJECT", os.path.dirname(os.path.dirname(__file__)))
 
-    boss_py = os.path.join(project_dir, "boss_app.py")
+    boss_py = os.path.join(project_dir, "boss", "app.py")
     if not os.path.exists(boss_py):
         output.emit(output.fail("restart", f"找不到 boss_app.py"))
         return

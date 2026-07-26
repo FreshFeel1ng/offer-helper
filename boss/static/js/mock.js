@@ -171,12 +171,24 @@ function handleMockMessage(msg) {
 
   } else if (type === 'evaluation') {
     mockState = 'idle';
+    var stdAns = msg.standard_answer || {};
     var qaItem = document.createElement('div');
     qaItem.className = 'mock-qa-item';
-    qaItem.innerHTML = '<div class="mock-q"><strong>Q:</strong> ' + escapeHtml(questionEl.textContent) + '</div>' +
-      '<div class="mock-a"><strong>A:</strong> ' + escapeHtml(answerInput.value) + '</div>' +
+    var inner = '<div class="mock-q"><strong>Q:</strong> ' + escapeHtml(questionEl.textContent) + '</div>' +
+      '<div class="mock-a"><strong>你的回答:</strong> ' + escapeHtml(answerInput.value) + '</div>' +
       '<div class="mock-score">评分: <span class="score-badge">' + (payload.score || 0) + '/10</span></div>' +
       '<div class="mock-comment">' + escapeHtml(payload.comment || '') + '</div>';
+    if (stdAns.key_points || stdAns.detailed_answer) {
+      inner += '<div class="mock-standard">' +
+        '<div class="mock-std-label">📖 标准答案</div>' +
+        '<div class="mock-std-keys">' + escapeHtml(stdAns.key_points || '') + '</div>' +
+        '<div class="mock-std-detail">' + escapeHtml(stdAns.detailed_answer || '') + '</div>';
+      if (stdAns.bonus_tips) {
+        inner += '<div class="mock-std-bonus">💡 加分项: ' + escapeHtml(stdAns.bonus_tips) + '</div>';
+      }
+      inner += '</div>';
+    }
+    qaItem.innerHTML = inner;
     qaArea.appendChild(qaItem);
 
     if (mockCurrentRound >= mockTotalRounds) {
@@ -466,11 +478,24 @@ function viewMockDetail(id) {
     if (ev.summary) html += '<p>' + escapeHtml(ev.summary) + '</p>';
 
     // Q&A
-    html += '<h4>问答记录</h4>';
+    html += '<h4>问答记录（含标准答案对比）</h4>';
     qa.forEach(function(qaItem, i){
-      html += '<div class="mock-qa-item"><strong>Q' + (i+1) + ':</strong> ' + escapeHtml(qaItem.q || '') + '</div>';
-      html += '<div class="mock-qa-item"><strong>A' + (i+1) + ':</strong> ' + escapeHtml(qaItem.a || '(未回答)') + '</div>';
+      html += '<div class="mock-qa-item">';
+      html += '<div class="mock-q"><strong>Q' + (i+1) + ':</strong> ' + escapeHtml(qaItem.q || '') + '</div>';
+      html += '<div class="mock-a">你的回答: ' + escapeHtml(qaItem.a || '(未回答)') + '</div>';
       html += '<div style="color:#22c55e;font-size:12px;">评分: ' + (qaItem.score || 0) + '/10</div>';
+      var std = qaItem.standard_answer || {};
+      if (std.key_points || std.detailed_answer) {
+        html += '<div class="mock-standard">';
+        html += '<div class="mock-std-label">📖 标准答案</div>';
+        html += '<div class="mock-std-keys">' + escapeHtml(std.key_points || '') + '</div>';
+        html += '<div class="mock-std-detail">' + escapeHtml(std.detailed_answer || '') + '</div>';
+        if (std.bonus_tips) {
+          html += '<div class="mock-std-bonus">💡 加分项: ' + escapeHtml(std.bonus_tips) + '</div>';
+        }
+        html += '</div>';
+      }
+      html += '</div>';
     });
 
     html += '</div>';

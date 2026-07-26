@@ -1,8 +1,10 @@
 """
-模拟面试模块
+模拟面试模块 v2
 - 使用 DeepSeek 根据职位/话题自动出题
-- 语音输入回答，AI 逐轮评分
-- 面试结束后生成综合评分报告
+- 出题时参考面试者历史薄弱点，靶向提升
+- 每轮生成标准答案供面试者学习
+- 语音/文字回答，AI 逐轮评分
+- 面试结束后生成综合评分报告 + 学习对比
 """
 
 import json
@@ -17,7 +19,7 @@ from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from .config import config as assistant_config
 
 
-# ── Question generation prompt ──
+# ── Weakness-aware question prompt ──
 QUESTION_PROMPT = ChatPromptTemplate.from_messages([
     ("system", """你是一位专业的{position}面试官，正在进行一场{difficulty}难度的模拟面试。
 
@@ -25,17 +27,44 @@ QUESTION_PROMPT = ChatPromptTemplate.from_messages([
 面试主题/岗位：{position}
 面试重点方向：{topic}
 
+{weakness_instruction}
+
 已问过的问题和回答：
 {history}
 
 请根据以上信息，生成下一道面试问题。要求：
-1. 问题要覆盖不同的考察维度（技术基础、项目经验、系统设计、行为面试等）
-2. 如果前面问过某个方向，下一题换另一个方向
-3. 难度逐步递增
-4. 问题要具体，有场景感，不能太宽泛
-5. 如果是最后一轮，可以问一个综合性或总结性问题
-6. 只输出问题本身，不要加任何前缀说明"""),
+1. 如果展示了历史薄弱点，优先针对薄弱维度出题，帮助候选人提升
+2. 问题要覆盖考察维度（技术基础、项目经验、系统设计、行为面试等）
+3. 如果前面问过某个方向，下一题换另一个方向
+4. 难度逐步递增
+5. 问题要有场景感，具体而不宽泛
+6. 如果是最后一轮，可以问综合性问题
+7. 只输出问题本身，不要加任何前缀说明"""),
     ("human", "请出下一道面试题"),
+])
+
+# ── Standard answer prompt ──
+STANDARD_ANSWER_PROMPT = ChatPromptTemplate.from_messages([
+    ("system", """你是一位资深的{position}面试官。请为以下面试题提供一个高分标准答案。
+
+**面试题**：{question}
+**面试难度**：{difficulty}
+**候选人当前回答（供参考优缺点）**：{user_answer}
+
+请从以下结构输出答案：
+1. 核心要点（2-3句话总结）
+2. 详细回答（结构化、有层次）
+3. 加分项提示（可以额外提到的点）
+
+输出格式（JSON）：
+{{
+  "key_points": "核心要点总结",
+  "detailed_answer": "详细回答（可多段落）",
+  "bonus_tips": "加分项提示"
+}}
+
+只输出 JSON，不要其他内容。"""),
+    ("human", "请生成标准答案"),
 ])
 
 # ── Evaluation prompt ──
@@ -89,6 +118,32 @@ REPORT_PROMPT = ChatPromptTemplate.from_messages([
 ])
 
 
+def _get_historical_weaknesses(position: str) -> str:
+    """从数据库中获取历史薄弱点，用于靶向出题"""
+    try:
+        from boss.state import list_mock_interviews
+        records = list_mock_interviews(limit=10)
+        all_weaknesses = []
+        for r in records:
+            if r.get("position", "") != position:
+                continue
+            try:
+                ev = json.loads(r.get("overall_evaluation", "{}"))
+            except Exception:
+                ev = {}
+            weaks = ev.get("weaknesses", [])
+            for w in weaks:
+                if w not in all_weaknesses:
+                    all_weaknesses.append(w)
+        if all_weaknesses:
+            return "**历史薄弱点（来自过往面试记录，请重点针对这些方向出题）**：\n" + "\n".join(
+                f"  - {w}" for w in all_weaknesses[:5]
+            )
+    except Exception:
+        pass
+    return ""
+
+
 @dataclass
 class MockInterviewSession:
     """模拟面试会话"""
@@ -98,10 +153,10 @@ class MockInterviewSession:
     difficulty: str = "medium"
     max_rounds: int = 5
     round_num: int = 0
-    qa_history: list = field(default_factory=list)  # [{"q":"...", "a":"...", "score": n}, ...]
+    qa_history: list = field(default_factory=list)
     current_question: str = ""
 
-    STATUS: str = "idle"  # idle / waiting_answer / evaluating / finished
+    STATUS: str = "idle"
 
     _llm: Optional[ChatOpenAI] = None
 
@@ -128,11 +183,16 @@ class MockInterviewSession:
             lines.append(f"Q{i}: {qa['q']}")
             if qa.get('a'):
                 lines.append(f"A{i}: {qa['a']}")
+                lines.append(f"评分: {qa.get('score', '-')}/10")
         return "\n".join(lines)
 
     async def generate_question(self) -> str:
-        """生成下一道面试题"""
+        """生成下一道面试题（参考历史薄弱点）"""
         self.round_num += 1
+        weakness_instruction = _get_historical_weaknesses(self.position)
+        if not weakness_instruction and self.round_num == 1:
+            weakness_instruction = "（暂无历史薄弱点记录，请根据岗位要求正常出题）"
+
         chain = QUESTION_PROMPT | self.llm
         response = await chain.ainvoke({
             "position": self.position,
@@ -141,15 +201,19 @@ class MockInterviewSession:
             "round_num": self.round_num,
             "max_rounds": self.max_rounds,
             "history": self._history_text(),
+            "weakness_instruction": weakness_instruction,
         })
         question = response.content.strip()
         self.current_question = question
         self.STATUS = "waiting_answer"
-        self.qa_history.append({"q": question, "a": "", "score": 0, "evaluation": {}})
+        self.qa_history.append({
+            "q": question, "a": "", "score": 0,
+            "evaluation": {}, "standard_answer": {},
+        })
         return question
 
     async def evaluate_answer(self, answer: str) -> dict:
-        """评估当前回答"""
+        """评估当前回答并生成标准答案"""
         if not self.qa_history:
             return {"error": "没有当前题目"}
 
@@ -162,24 +226,41 @@ class MockInterviewSession:
             "difficulty": self.get_difficulty_label(),
         })
         content = response.content.strip()
-        # 提取 JSON
         try:
-            # 尝试直接解析
             evaluation = json.loads(content)
         except json.JSONDecodeError:
-            # 尝试提取 JSON 块
             import re
             match = re.search(r'\{.*\}', content, re.DOTALL)
-            if match:
-                try:
-                    evaluation = json.loads(match.group())
-                except json.JSONDecodeError:
-                    evaluation = {"score": 0, "comment": "评分解析失败", "correctness": "", "depth": "", "communication": ""}
-            else:
-                evaluation = {"score": 0, "comment": "评分解析失败", "correctness": "", "depth": "", "communication": ""}
+            evaluation = json.loads(match.group()) if match else {}
+        if not isinstance(evaluation, dict):
+            evaluation = {}
 
         self.qa_history[-1]["score"] = evaluation.get("score", 0)
         self.qa_history[-1]["evaluation"] = evaluation
+
+        # ── 生成标准答案 ──
+        try:
+            sa_chain = STANDARD_ANSWER_PROMPT | self.llm
+            sa_resp = await sa_chain.ainvoke({
+                "position": self.position,
+                "question": self.current_question,
+                "user_answer": answer,
+                "difficulty": self.get_difficulty_label(),
+            })
+            sa_content = sa_resp.content.strip()
+            try:
+                standard = json.loads(sa_content)
+            except json.JSONDecodeError:
+                import re
+                match = re.search(r'\{.*\}', sa_content, re.DOTALL)
+                standard = json.loads(match.group()) if match else {}
+            if not isinstance(standard, dict):
+                standard = {}
+            self.qa_history[-1]["standard_answer"] = standard
+            print(f"[Mock面试] 标准答案已生成 ({len(standard.get('detailed_answer', ''))}字)")
+        except Exception as e:
+            print(f"[Mock面试] 生成标准答案失败: {e}")
+            self.qa_history[-1]["standard_answer"] = {"key_points": "", "detailed_answer": "", "bonus_tips": ""}
 
         if self.round_num >= self.max_rounds:
             self.STATUS = "finished"
@@ -191,7 +272,11 @@ class MockInterviewSession:
     async def generate_report(self) -> dict:
         """生成最终评估报告"""
         qa_text = "\n\n".join([
-            f"第{i+1}轮\nQ: {qa['q']}\nA: {qa['a'] or '(未回答)'}\n评分: {qa.get('score', '-')}"
+            f"第{i+1}轮\n"
+            f"Q: {qa['q']}\n"
+            f"A: {qa['a'] or '(未回答)'}\n"
+            f"评分: {qa.get('score', '-')}/10\n"
+            f"标准答案要点: {qa.get('standard_answer', {}).get('key_points', '-')}"
             for i, qa in enumerate(self.qa_history)
         ])
 
@@ -209,19 +294,12 @@ class MockInterviewSession:
         except json.JSONDecodeError:
             import re
             match = re.search(r'\{.*\}', content, re.DOTALL)
-            if match:
-                try:
-                    report = json.loads(match.group())
-                except json.JSONDecodeError:
-                    report = {"overall_score": 0, "summary": "报告生成失败", "strengths": [], "weaknesses": []}
-            else:
-                report = {"overall_score": 0, "summary": "报告生成失败", "strengths": [], "weaknesses": []}
+            report = json.loads(match.group()) if match else {}
 
         self.STATUS = "finished"
         return report
 
     def to_summary(self) -> dict:
-        """导出会话摘要"""
         return {
             "session_id": self.session_id,
             "position": self.position,

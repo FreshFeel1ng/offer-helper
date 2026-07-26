@@ -70,8 +70,11 @@ def register_mock_routes(app):
                         {"type": "evaluating", "payload": {"message": "正在评估..."}}, ensure_ascii=False))
                     evaluation = await msession.evaluate_answer(answer)
                     print(f"[Mock面试] 评分: {evaluation.get('score', 0)}/10")
+                    standard = (msession.qa_history[-1].get("standard_answer", {}) 
+                                if msession.qa_history else {})
                     await websocket.send_text(json.dumps(
-                        {"type": "evaluation", "payload": evaluation}, ensure_ascii=False))
+                        {"type": "evaluation", "payload": evaluation,
+                         "standard_answer": standard}, ensure_ascii=False))
 
                 elif msg_type == "next":
                     if not msession:

@@ -1847,3 +1847,4 @@ select.input option{background:var(--bg);color:var(--text)}
 .mock-std-keys{color:var(--text);margin-bottom:6px}
 .mock-std-detail{color:var(--text-2);white-space:pre-wrap}
 .mock-std-bonus{margin-top:6px;color:var(--accent);font-size:11px}
+.mock-standard-pending{padding:8px 12px;color:var(--text-3);font-style:italic;font-size:11px}

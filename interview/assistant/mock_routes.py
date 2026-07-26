@@ -68,13 +68,17 @@ def register_mock_routes(app):
                     print(f"[Mock面试] 收到第{len(msession.qa_history)}题回答 ({len(answer)}字)")
                     await websocket.send_text(json.dumps(
                         {"type": "evaluating", "payload": {"message": "正在评估..."}}, ensure_ascii=False))
+                    # Step 1: 评分（快速，单次 LLM 调用）
                     evaluation = await msession.evaluate_answer(answer)
                     print(f"[Mock面试] 评分: {evaluation.get('score', 0)}/10")
-                    standard = (msession.qa_history[-1].get("standard_answer", {}) 
-                                if msession.qa_history else {})
                     await websocket.send_text(json.dumps(
                         {"type": "evaluation", "payload": evaluation,
-                         "standard_answer": standard}, ensure_ascii=False))
+                         "standard_answer": {}}, ensure_ascii=False))
+                    # Step 2: 异步生成标准答案（再用一次 LLM，单独推送）
+                    standard = await msession.generate_standard_answer()
+                    await msession.finish_round()
+                    await websocket.send_text(json.dumps(
+                        {"type": "standard_answer", "payload": standard}, ensure_ascii=False))
 
                 elif msg_type == "next":
                     if not msession:

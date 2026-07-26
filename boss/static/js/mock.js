@@ -171,25 +171,37 @@ function handleMockMessage(msg) {
 
   } else if (type === 'evaluation') {
     mockState = 'idle';
-    var stdAns = msg.standard_answer || {};
+    // 先显示评分，标准答案稍后到达
     var qaItem = document.createElement('div');
     qaItem.className = 'mock-qa-item';
-    var inner = '<div class="mock-q"><strong>Q:</strong> ' + escapeHtml(questionEl.textContent) + '</div>' +
+    qaItem.id = 'qa-item-' + (mockCurrentRound);
+    qaItem.innerHTML = '<div class="mock-q"><strong>Q:</strong> ' + escapeHtml(questionEl.textContent) + '</div>' +
       '<div class="mock-a"><strong>你的回答:</strong> ' + escapeHtml(answerInput.value) + '</div>' +
       '<div class="mock-score">评分: <span class="score-badge">' + (payload.score || 0) + '/10</span></div>' +
-      '<div class="mock-comment">' + escapeHtml(payload.comment || '') + '</div>';
-    if (stdAns.key_points || stdAns.detailed_answer) {
-      inner += '<div class="mock-standard">' +
-        '<div class="mock-std-label">📖 标准答案</div>' +
-        '<div class="mock-std-keys">' + escapeHtml(stdAns.key_points || '') + '</div>' +
-        '<div class="mock-std-detail">' + escapeHtml(stdAns.detailed_answer || '') + '</div>';
-      if (stdAns.bonus_tips) {
-        inner += '<div class="mock-std-bonus">💡 加分项: ' + escapeHtml(stdAns.bonus_tips) + '</div>';
-      }
-      inner += '</div>';
-    }
-    qaItem.innerHTML = inner;
+      '<div class="mock-comment">' + escapeHtml(payload.comment || '') + '</div>' +
+      '<div class="mock-standard-pending">⏳ 正在生成标准答案...</div>';
     qaArea.appendChild(qaItem);
+
+  } else if (type === 'standard_answer') {
+    // 标准答案到达，更新对应 QA item
+    var qaId = 'qa-item-' + mockCurrentRound;
+    var existing = document.getElementById(qaId);
+    if (existing) {
+      var pending = existing.querySelector('.mock-standard-pending');
+      if (pending) {
+        var html = '<div class="mock-standard">' +
+          '<div class="mock-std-label">📖 标准答案</div>' +
+          '<div class="mock-std-keys">' + escapeHtml(payload.key_points || '') + '</div>' +
+          '<div class="mock-std-detail">' + escapeHtml(payload.detailed_answer || '') + '</div>';
+        if (payload.bonus_tips) {
+          html += '<div class="mock-std-bonus">💡 加分项: ' + escapeHtml(payload.bonus_tips) + '</div>';
+        }
+        html += '</div>';
+        pending.outerHTML = html;
+      }
+    }
+    // 标准答案到达后处理按钮状态
+    showMockStatus('');
 
     if (mockCurrentRound >= mockTotalRounds) {
       endBtn.style.display = 'none';

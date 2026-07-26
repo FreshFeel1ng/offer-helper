@@ -213,7 +213,7 @@ class MockInterviewSession:
         return question
 
     async def evaluate_answer(self, answer: str) -> dict:
-        """评估当前回答并生成标准答案"""
+        """评估当前回答（单次 LLM 调用，快速返回评分）"""
         if not self.qa_history:
             return {"error": "没有当前题目"}
 
@@ -237,14 +237,18 @@ class MockInterviewSession:
 
         self.qa_history[-1]["score"] = evaluation.get("score", 0)
         self.qa_history[-1]["evaluation"] = evaluation
+        return evaluation
 
-        # ── 生成标准答案 ──
+    async def generate_standard_answer(self) -> dict:
+        """生成当前题目的标准答案（可在评分后异步调用）"""
+        if not self.qa_history:
+            return {}
         try:
             sa_chain = STANDARD_ANSWER_PROMPT | self.llm
             sa_resp = await sa_chain.ainvoke({
                 "position": self.position,
                 "question": self.current_question,
-                "user_answer": answer,
+                "user_answer": self.qa_history[-1].get("a", ""),
                 "difficulty": self.get_difficulty_label(),
             })
             sa_content = sa_resp.content.strip()
@@ -256,18 +260,19 @@ class MockInterviewSession:
                 standard = json.loads(match.group()) if match else {}
             if not isinstance(standard, dict):
                 standard = {}
-            self.qa_history[-1]["standard_answer"] = standard
-            print(f"[Mock面试] 标准答案已生成 ({len(standard.get('detailed_answer', ''))}字)")
         except Exception as e:
             print(f"[Mock面试] 生成标准答案失败: {e}")
-            self.qa_history[-1]["standard_answer"] = {"key_points": "", "detailed_answer": "", "bonus_tips": ""}
+            standard = {"key_points": "", "detailed_answer": "", "bonus_tips": ""}
+        self.qa_history[-1]["standard_answer"] = standard
+        print(f"[Mock面试] 标准答案已生成 ({len(standard.get('detailed_answer', ''))}字)")
+        return standard
 
+    async def finish_round(self):
+        """完成一轮：标记为 idle 或 finished"""
         if self.round_num >= self.max_rounds:
             self.STATUS = "finished"
         else:
             self.STATUS = "idle"
-
-        return evaluation
 
     async def generate_report(self) -> dict:
         """生成最终评估报告"""

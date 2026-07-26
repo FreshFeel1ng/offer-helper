@@ -272,7 +272,12 @@ function mockSkip() {
 }
 
 function mockGetReport() {
-  if (!mockWs || mockWs.readyState !== WebSocket.OPEN) return;
+  if (!mockWs || mockWs.readyState !== WebSocket.OPEN) {
+    showMockStatus('⚠️ 连接已断开，请退出后重新开始');
+    var reportBtn = document.getElementById('mockReportBtn');
+    if (reportBtn) { reportBtn.disabled = false; reportBtn.textContent = '📊 查看评估'; }
+    return;
+  }
   if (mockState === 'finished' || mockState === 'evaluating' || mockState === 'submitting') return;
   mockState = 'evaluating';
   mockWs.send(JSON.stringify({ type: 'report' }));
@@ -332,6 +337,10 @@ function resetMock() {
   document.getElementById('mockAnswerInput').style.display = 'block';
   var exitBtn = document.getElementById('mockExitBtn');
   if (exitBtn) exitBtn.style.display = 'none';
+  var reportBtn = document.getElementById('mockReportBtn');
+  if (reportBtn) { reportBtn.disabled = false; reportBtn.textContent = '📊 查看评估'; reportBtn.style.display = 'none'; }
+  var startBtn = document.getElementById('mockStartBtn');
+  if (startBtn) startBtn.style.display = 'none';
   showMockStatus('');
   loadMockHistory();
 }

@@ -270,7 +270,7 @@
         <div style="font-size:11px;color:var(--text-3);margin-top:2px;">可选。填写后 PDF 简历使用 MinerU 高精度解析，不填则用本地 PyMuPDF 解析。</div>
         <div class="setting-row" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);"><label>硅基流动 API Key</label><input type="text" id="setSiliconflowKey" placeholder="用于 BGE-M3 向量嵌入，可选" style="flex:1;"></div>
         <div style="font-size:11px;color:var(--text-3);margin-top:2px;">可选。填写后启用 BGE-M3 向量检索（历史 JD 相似度 / 简历语义匹配），不填则跳过向量检索，不影响主流程。</div>
-        <div class="setting-row" style="margin-top:10px;"><label>嵌入模型</label><select id="setEmbeddingModel" style="flex:1;padding:8px;background:var(--bg-card);border:1px solid var(--border);color:var(--text);border-radius:6px;font-size:13px;"><option value="" style="background:#1a1a2e;color:#fafafa;">BAAI/bge-m3 (默认)</option><option value="Pro/BAAI/bge-m3" style="background:#1a1a2e;color:#fafafa;">Pro/BAAI/bge-m3</option><option value="BAAI/bge-large-zh-v1.5" style="background:#1a1a2e;color:#fafafa;">BAAI/bge-large-zh-v1.5</option><option value="netease-youdao/bce-embedding-base_v1" style="background:#1a1a2e;color:#fafafa;">bce-embedding-base</option></select></div>
+        <div class="setting-row" style="margin-top:10px;"><label>嵌入模型</label><select id="setEmbeddingModel" style="flex:1;"><option value="" style="background:#ffffff;color:#111318;">BAAI/bge-m3 (默认)</option><option value="Pro/BAAI/bge-m3" style="background:#ffffff;color:#111318;">Pro/BAAI/bge-m3</option><option value="BAAI/bge-large-zh-v1.5" style="background:#ffffff;color:#111318;">BAAI/bge-large-zh-v1.5</option><option value="netease-youdao/bce-embedding-base_v1" style="background:#ffffff;color:#111318;">bce-embedding-base</option></select></div>
       </div>
 
       <div class="section"><h3>个人资料</h3>
@@ -415,10 +415,9 @@
         <!-- 输入区 -->
         <div style="display:flex;gap:8px;margin-bottom:16px;">
           <input id="qaAskInput" type="text" placeholder="输入技术问题，如：RAG 和微调有什么区别？"
-                 style="flex:1;padding:10px 12px;border:1px solid var(--border);border-radius:6px;
-                        background:var(--bg);color:var(--text);font-size:14px;"
+                 style="flex:1;"
                  onkeydown="if(event.key==='Enter')qaAsk()">
-          <button class="btn btn-primary" onclick="qaAsk()" style="white-space:nowrap;padding:10px 20px;">
+          <button class="btn btn-primary" onclick="qaAsk()" style="white-space:nowrap;">
             🔍 提问
           </button>
         </div>
@@ -570,14 +569,14 @@
             <span style="font-size:12px;font-weight:500;">面试问答</span>
             <div style="display:flex;gap:6px;align-items:center;">
               <span id="asstMicLabel" style="font-size:11px;color:var(--text-3);">点击麦克风开始</span>
-              <button id="asstMicBtn" class="btn btn-sm btn-primary" onclick="assistantToggleMic()" style="width:36px;height:28px;font-size:14px;line-height:1;padding:0;" title="语音输入">🎤</button>
+              <button id="asstMicBtn" class="btn btn-sm btn-primary" onclick="assistantToggleMic()" style="width:30px;height:30px;font-size:14px;line-height:1;padding:0;" title="语音输入">🎤</button>
             </div>
           </div>
           <!-- 实时转录文字 -->
           <div id="asstTranscript" style="min-height:28px;padding:6px 10px;background:var(--bg-card);border:1px solid var(--border);border-radius:6px;font-size:12px;color:var(--text-2);margin-bottom:8px;display:none;"></div>
           <!-- 备用文字输入 -->
           <div style="display:flex;gap:8px;">
-            <input type="text" id="asstQuestion" placeholder="或手动输入问题..." style="flex:1;font-size:12px;padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg-card);color:var(--text);" onkeydown="if(event.key==='Enter')assistantAsk()">
+            <input type="text" id="asstQuestion" placeholder="或手动输入问题..." style="flex:1;" onkeydown="if(event.key==='Enter')assistantAsk()">
             <button class="btn btn-sm btn-primary" onclick="assistantAsk()">发送</button>
           </div>
         </div>

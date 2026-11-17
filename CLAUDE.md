@@ -34,7 +34,7 @@ BOSS 直聘（zhipin.com）自动化求职工具，两个进程：
 - **AI 分析**：岗位匹配度分析、简历优化（24h 缓存）、沟通建议（24h 缓存）
 - **面试辅助**：简历解析（MinerU / 本地兜底）→ 关键词/向量双模式检索 → 流式口语化回答
 - **模拟面试**：LLM 出题 + 逐轮评分 + 标准答案 + 综合报告（WebSocket 实时推送）
-- **Web 控制台**：`boss/static/` 下的深色 SPA（HTML + Vanilla JS，无构建步骤、无 CDN）
+- **Web 控制台**：`boss/static/` 下的浅色 SPA（HTML + Vanilla JS，无构建步骤、无 CDN）
 - **CLI**：18 条命令，stdout JSON 信封，专为 AI Agent 集成设计
 
 ## 技术栈
@@ -74,7 +74,7 @@ boss/                          # 主服务包（FastAPI + 浏览器自动化）
 │   └── loop.py                # AgentLoop：规划→执行→重规划→总结（最多 10 步）
 └── static/
     ├── dashboard.html         # SPA 骨架（结构 + 内联样式片段）
-    ├── css/style.css          # 深色主题样式
+    ├── css/style.css          # 浅色主题样式（颜色全走 :root 令牌）
     └── js/
         ├── app.js             # 主逻辑：搜索/投递/会话/设置（含 setting ↔ 后端字段映射）
         ├── assistant.js       # 实时面试辅助面板

@@ -504,7 +504,7 @@ function viewMockDetail(id) {
       html += '<div class="mock-qa-item">';
       html += '<div class="mock-q"><strong>Q' + (i+1) + ':</strong> ' + escapeHtml(qaItem.q || '') + '</div>';
       html += '<div class="mock-a">你的回答: ' + escapeHtml(qaItem.a || '(未回答)') + '</div>';
-      html += '<div style="color:#22c55e;font-size:12px;">评分: ' + (qaItem.score || 0) + '/10</div>';
+      html += '<div style="color:#15803d;font-size:12px;">评分: ' + (qaItem.score || 0) + '/10</div>';
       var std = qaItem.standard_answer || {};
       if (std.key_points || std.detailed_answer) {
         html += '<div class="mock-standard">';

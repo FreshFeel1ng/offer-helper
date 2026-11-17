@@ -122,7 +122,7 @@ $ offerhelper status                       # 看浏览器+今日统计
 
 ## 💻 Web 控制台
 
-> 深色科技感（Vercel / Raycast 风格）单文件 SPA，无构建步骤、无外部 CDN。
+> 浅色简洁风（参考 DSH 设计语言：中性灰阶 + 单一蓝色主色）单文件 SPA，无构建步骤、无外部 CDN。
 
 ### 主要功能
 
@@ -343,7 +343,7 @@ $ offerhelper scan-apply --max-pages 5
 │   │   └── prompts.py        # Prompt 模板
 │   └── static/               # Web 前端（HTML + CSS + Vanilla JS，无构建步骤）
 │       ├── dashboard.html    # SPA 骨架
-│       ├── css/style.css     # 深色主题
+│       ├── css/style.css     # 浅色主题（设计令牌在 :root）
 │       └── js/               # app / assistant / mock / smart-send
 ├── offerhelper_cli/          # CLI (18 命令)
 │   ├── cli.py / client.py / output.py / schema.json

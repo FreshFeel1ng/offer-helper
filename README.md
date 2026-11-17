@@ -76,25 +76,18 @@ playwright install firefox    # 浏览器自动化
 
 > Windows 平台若 `playwright install` 失败，参阅[诊断与排障](#-诊断与排障)。
 
-### 🗄️ 配置 PostgreSQL
+### 🗄️ 数据库（零配置）
 
-本项目使用 PostgreSQL 存储数据，需要先创建数据库并建表：
+本地 SQLite，**不需要安装任何数据库服务**：首次启动自动建表，数据文件在 `.boss_profile/boss_state.db`。
 
 ```bash
-# 1. 安装 PostgreSQL 并启动服务
-
-# 2. 创建数据库
-psql -U postgres -c "CREATE DATABASE offer_helper;"
-
-# 3. 配置连接信息
+# 想换位置就设环境变量（可选）
 cp .env.example .env
-# 编辑 .env 填入你的 PG_HOST / PG_USER / PG_PASSWORD / PG_DATABASE
-
-# 4. 一键建表
-psql -U postgres -d offer_helper -f schema.sql
+# 编辑 .env：BOSS_DB_PATH=D:/data/offer_helper.db
 ```
 
-> 共 9 张表：投递记录、HR 会话、聊天消息、设置、每日统计、候选池、面试会话、线下面试地点、Token 用量统计。
+> 共 9 张表：投递记录、HR 会话、聊天消息、设置、每日统计、候选池、线下面试地点、Token 用量统计、模拟面试记录。
+> 表结构见 [`schema.sql`](schema.sql)（仅供参考，程序启动时会自动建表 + 给老库补列）。
 
 ---
 
@@ -258,6 +251,17 @@ $ offerhelper scan-apply --max-pages 5
 | 小米 MiMo | ✅ |
 | 自定义（任意 OpenAI 兼容 API） | — |
 
+### 🔎 向量化（embedding）
+
+历史 JD 相似度、简历语义检索都靠 **BGE-M3**（硅基流动 OpenAI 兼容接口），**不需要本地跑任何模型服务**：
+
+| 设置项 | 说明 |
+|--------|------|
+| 硅基流动 API Key | 不填则跳过向量检索（RAG 是增强项，主流程照常跑） |
+| 嵌入模型 | 默认 `BAAI/bge-m3`，可换其它 OpenAI 兼容 embedding 模型 |
+
+> 换模型后历史向量维度会变，旧向量会被自动跳过；重新点一次「简历优化」即可刷新该岗位的向量。
+
 ### 🧠 三个 AI 智能体
 
 #### 1️⃣ AI 岗位分析 — `/api/jobs/analyze`
@@ -328,7 +332,7 @@ $ offerhelper scan-apply --max-pages 5
 │   ├── firefox.py            # BOSS 搜索 + 详情 XHR + 福利筛选
 │   ├── geo.py                # 城市/区/规模 BOSS 编码映射
 │   ├── replier.py            # AI 回复 + 招呼语 + 简历优化上下文
-│   ├── state.py              # PostgreSQL 数据持久化
+│   ├── state.py              # SQLite 数据持久化
 │   ├── scraper.py            # 通用抓取工具
 │   ├── rag.py                # JD 历史 RAG 检索
 │   ├── llm_client.py         # LLM 调用客户端
@@ -337,16 +341,19 @@ $ offerhelper scan-apply --max-pages 5
 │   │   ├── tools.py          # 14 个原子工具
 │   │   ├── skills.py         # 3 个复合技能
 │   │   └── prompts.py        # Prompt 模板
-│   └── static/
-│       └── dashboard.html    # Web 前端 (单文件 SPA)
+│   └── static/               # Web 前端（HTML + CSS + Vanilla JS，无构建步骤）
+│       ├── dashboard.html    # SPA 骨架
+│       ├── css/style.css     # 深色主题
+│       └── js/               # app / assistant / mock / smart-send
 ├── offerhelper_cli/          # CLI (18 命令)
 │   ├── cli.py / client.py / output.py / schema.json
-├── interview/                # 面试问答子模块
-├── schema.sql                # PostgreSQL 建表语句
-├── .env.example              # 数据库配置示例
+├── interview/                # 面试服务（实时面试辅助 + 模拟面试）
+├── tests/                    # pytest（离线，不联网不启浏览器）
+├── schema.sql                # SQLite 建表语句（参考，启动时自动建表）
+├── .env.example              # 环境变量示例（数据库路径 / AI Key）
 ├── pyproject.toml            # 打包 + CLI 入口
 ├── SKILL.md                  # Agent 集成指南
-├── CLAUDE.md                 # 深度技术文档
+├── CLAUDE.md                 # 技术说明（给 AI 助手 / 接手维护的人看）
 └── setup.sh
 ```
 
@@ -420,7 +427,7 @@ Web 浏览器                  FastAPI                     BOSS 直聘
 │  .html   │  HTTP/REST   │               │  Firefox     │               │
 └──────────┘              │  automation   │              └──────────────┘
                           │  replier ─────────────────►│  AI API       │
-                          │  state ─────► PostgreSQL   └──────────────┘
+                          │  state ─────► SQLite       └──────────────┘
                           └──────────────┘
                   offerhelper CLI ──► HTTP 客户端 ──► FastAPI
 ```
@@ -429,10 +436,11 @@ Web 浏览器                  FastAPI                     BOSS 直聘
 |------|------|
 | 后端 | Python ≥ 3.10 + FastAPI |
 | 浏览器 | Playwright + Firefox 持久化 Profile |
-| 数据库 | PostgreSQL (psycopg2) |
+| 数据库 | SQLite（WAL 模式，零部署） |
 | 前端 | 单文件 HTML + Vanilla JS + WebSocket（无构建无 CDN） |
 | CLI | Click + httpx + JSON 信封 |
 | AI | OpenAI Chat Completions 兼容 API |
+| 向量化 | BGE-M3（硅基流动 `/v1/embeddings`，无本地模型 / 无向量数据库） |
 | 风控绕开 | `page.evaluate(fetch)` 浏览器内调用，自动带 cookie/referer |
 
 ---
@@ -481,6 +489,7 @@ offerhelper status             # 浏览器运行状态
 | HR 不活跃阈值 | 超过 N 天未活跃自动跳过（默认 7） |
 | 公司去重 | 同一公司只投递一次（默认开启） |
 | AI 配置 | 平台 / Key / Base URL / 模型 |
+| 硅基流动 API Key + 嵌入模型 | BGE-M3 向量检索（可选，不填跳过） |
 
 ### 数据库表
 

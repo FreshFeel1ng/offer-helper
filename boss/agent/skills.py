@@ -3,19 +3,16 @@
 每个 skill 在 Python 内部顺序调用现有工具函数，不经过 LLM 编排。
 """
 
-import json
-import sys
-import time
 import asyncio
-from pathlib import Path
-from typing import Any
+import time
 
 from .tools import (
-    search_jobs, list_jobs, get_job_detail,
-    analyze_jd, optimize_resume_for_jd, get_chat_suggestion,
-    apply_job, batch_apply, generate_reply,
-    get_status, get_stats, preview_companies,
-    summarize_result,
+    analyze_jd,
+    apply_job,
+    get_chat_suggestion,
+    get_job_detail,
+    optimize_resume_for_jd,
+    search_jobs,
 )
 
 # ═══════════════════════════════════════

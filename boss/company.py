@@ -8,10 +8,10 @@
 数据拼装和给前端 / API 的统一 dict 在这里完成。
 """
 
-from typing import Optional, Dict, Any, List
+from typing import Any, Dict, List, Optional
 
 from .automation import pick_top_hr
-from .state import list_jobs_by_company, list_companies_by_position_count
+from .state import list_companies_by_position_count, list_jobs_by_company
 
 
 def _normalize_job_url(url: str) -> str:
@@ -42,7 +42,6 @@ def build_company_preview(
     jobs = jobs or []
     hrs = hrs or []
 
-    job_urls = [j.get("url") for j in jobs if j.get("url")]
     for j in jobs:
         if j.get("url"):
             j["url"] = _normalize_job_url(j["url"])

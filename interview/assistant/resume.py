@@ -2,24 +2,32 @@
 简历解析与项目知识库
 
 支持 PDF / DOCX / 纯文本简历解析，提取项目经历。
-基于提取的内容构建 RAG 知识库，面试时检索相关经历生成针对性回答。
+基于提取的内容构建知识库，面试时检索相关经历生成针对性回答。
+检索支持两种模式：关键词匹配 / 语义向量（本地内存余弦检索，无需向量数据库）。
 """
 import io
 import json
-import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
 import numpy as np
-from langchain_core.documents import Document
 
+from . import llm_client
 from .config import config
 
 # 简历数据根目录
 RESUME_ROOT = Path(__file__).parent.parent / "data" / "resumes"
 RESUME_ROOT.mkdir(parents=True, exist_ok=True)
+
+
+@dataclass
+class Chunk:
+    """知识库文本块（替代 langchain 的 Document，字段名保持一致）"""
+
+    page_content: str
+    metadata: dict = field(default_factory=dict)
 
 
 def _get_session_dir(session_id: str) -> Path:
@@ -63,7 +71,7 @@ class ResumeData:
     work_experience: list[WorkExperience] = field(default_factory=list)
     education: list[dict] = field(default_factory=list)
     raw_text: str = ""
-    chunks: list[Document] = field(default_factory=list)
+    chunks: list[Chunk] = field(default_factory=list)
 
 
 class ResumeParser:
@@ -87,9 +95,10 @@ class ResumeParser:
 
     def _parse_with_mineru(self, content: bytes, filename: str) -> str:
         """使用 MinerU 精准解析 API"""
-        import requests
         import time
         import zipfile
+
+        import requests
 
         token = config.mineru_api_token
         base = "https://mineru.net/api/v4"
@@ -177,7 +186,7 @@ class ResumeParser:
                     return ""
 
                 elif state == "failed":
-                    print(f"[Resume] MinerU: 任务失败")
+                    print("[Resume] MinerU: 任务失败")
                     return ""
 
                 elif attempt % 5 == 0:
@@ -253,16 +262,7 @@ class ResumeExtractor:
 
     def _extract_all_with_llm(self, raw_text: str) -> dict:
         """使用 LLM 从简历中同时提取项目经历和工作/实习经历"""
-        from langchain_openai import ChatOpenAI
-
         text = raw_text[:8000]
-
-        llm = ChatOpenAI(
-            model=config.llm_model,
-            temperature=0.1,
-            api_key=config.deepseek_api_key,
-            base_url=config.deepseek_base_url,
-        )
 
         prompt = f"""从以下简历中提取所有项目经历和工作/实习经历。返回严格 JSON 对象。
 
@@ -303,23 +303,13 @@ class ResumeExtractor:
 5. 不要加任何额外文字或 markdown 代码块标记"""
 
         try:
-            response = llm.invoke(prompt)
-            content = response.content if hasattr(response, 'content') else str(response)
+            content = llm_client.chat([{"role": "user", "content": prompt}], temperature=0.1)
             print(f"[Resume] LLM 返回: {content[:300]}...")
-            # 清理可能的 markdown 代码块
-            content = content.strip()
-            if content.startswith("```json"):
-                content = content[7:]
-            if content.startswith("```"):
-                content = content[3:]
-            if content.endswith("```"):
-                content = content[:-3]
-            content = content.strip()
 
-            data = json.loads(content)
-            if not isinstance(data, dict):
-                print(f"[Resume] LLM 返回格式异常: {type(data)}")
-                return {"projects": [], "work_experience": []}
+            data = llm_client.parse_json_response(content)
+            if not data:
+                print("[Resume] LLM 返回格式异常，回退到正则")
+                return {"projects": self._extract_projects_fallback(raw_text), "work_experience": []}
 
             projects = []
             for p in data.get("projects", []):
@@ -353,9 +343,8 @@ class ResumeExtractor:
             return {"projects": projects, "work_experience": works}
 
         except Exception as e:
+            # 没配 Key / 接口异常时不中断上传流程，退回正则提取
             print(f"[Resume] LLM 提取失败，回退到正则: {e}")
-            import traceback
-            traceback.print_exc()
             projects = self._extract_projects_fallback(raw_text)
             return {"projects": projects, "work_experience": []}
 
@@ -374,7 +363,7 @@ class ResumeExtractor:
 
     def _extract_name(self, text: str) -> str:
         """提取姓名（通常是简历第一行）"""
-        lines = [l.strip() for l in text.split("\n") if l.strip()]
+        lines = [line.strip() for line in text.split("\n") if line.strip()]
         for line in lines[:5]:
             # 中文姓名 2-4 字
             if re.match(r"^[\u4e00-\u9fff]{2,4}$", line):
@@ -485,8 +474,10 @@ class ResumeKnowledgeBase:
         self.session_id = session_id
         self.data_dir = _get_session_dir(session_id)
         self.resume: Optional[ResumeData] = None
-        self._chunks: list[Document] = []
-        self._vector_store = None
+        self._chunks: list[Chunk] = []
+        self._chunk_vectors: Optional[np.ndarray] = None  # 向量模式下缓存的块向量矩阵
+        self._vector_source: str = ""  # 生成 _chunk_vectors 时使用的简历标识
+        self._resume_id: str = ""  # 当前简历的文件标识（用于向量缓存文件名）
 
     def load_resume(self, content: bytes, filename: str) -> ResumeData:
         """加载并解析简历"""
@@ -505,6 +496,7 @@ class ResumeKnowledgeBase:
 
         resume = extractor.extract(raw_text)
         self.resume = resume
+        self._resume_id = Path(filename).stem or "default"
 
         self._build_chunks(resume)
         self._save_local(resume, filename)
@@ -551,6 +543,7 @@ class ResumeKnowledgeBase:
             ))
 
         self.resume = resume
+        self._resume_id = Path(filename).stem or "default"
         self._build_chunks(resume)
         return resume
 
@@ -582,13 +575,13 @@ class ResumeKnowledgeBase:
         chunks = []
 
         if resume.summary:
-            chunks.append(Document(
+            chunks.append(Chunk(
                 page_content=f"候选人背景: {resume.summary}",
                 metadata={"type": "summary"}
             ))
 
         if resume.skills:
-            chunks.append(Document(
+            chunks.append(Chunk(
                 page_content=f"技能: {', '.join(resume.skills)}",
                 metadata={"type": "skills"}
             ))
@@ -604,7 +597,7 @@ class ResumeKnowledgeBase:
             if proj.raw_text:
                 content_parts.append(f"详细描述: {proj.raw_text[:500]}")
 
-            chunks.append(Document(
+            chunks.append(Chunk(
                 page_content="\n".join(content_parts),
                 metadata={"type": "project", "project_index": i, "project_name": proj.name}
             ))
@@ -624,14 +617,17 @@ class ResumeKnowledgeBase:
             if exp.raw_text:
                 content_parts.append(f"原文: {exp.raw_text[:500]}")
 
-            chunks.append(Document(
+            chunks.append(Chunk(
                 page_content="\n".join(content_parts),
                 metadata={"type": "work_experience", "exp_index": i, "company": exp.company}
             ))
 
         self._chunks = chunks
+        # 简历变了，之前缓存的向量作废
+        self._chunk_vectors = None
+        self._vector_source = ""
 
-    def search(self, query: str, top_k: int = 3) -> list[Document]:
+    def search(self, query: str, top_k: int = 3) -> list[Chunk]:
         """搜索相关简历内容"""
         if not self._chunks:
             return []
@@ -641,7 +637,7 @@ class ResumeKnowledgeBase:
         else:
             return self._search_keyword(query, top_k)
 
-    def _search_keyword(self, query: str, top_k: int = 3) -> list[Document]:
+    def _search_keyword(self, query: str, top_k: int = 3) -> list[Chunk]:
         """关键词匹配检索"""
         scored = []
         query_lower = query.lower()
@@ -655,55 +651,95 @@ class ResumeKnowledgeBase:
         scored.sort(key=lambda x: x[0], reverse=True)
         return [c for _, c in scored[:top_k] if _ > 0] or [c for _, c in scored[:top_k]]
 
-    def _get_embeddings(self):
-        """获取 BGE-M3 嵌入模型"""
-        from langchain_openai import OpenAIEmbeddings
-        return OpenAIEmbeddings(
-            model=config.embedding_model,
-            api_key=config.siliconflow_api_key,
-            base_url=config.siliconflow_base_url,
-        )
+    # ── 向量检索（内存余弦相似度，无需向量数据库）──
 
-    def _init_vector_store(self):
-        """初始化 Milvus 向量存储"""
-        if self._vector_store is not None:
-            return
+    def _embedding_cache_path(self) -> Path:
+        """块向量缓存文件：data/resumes/<session>/_embeddings/<简历标识>.json"""
+        source = self._resume_source()
+        cache_dir = self.data_dir / "_embeddings"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        return cache_dir / f"{source}.json"
 
-        from langchain_milvus import Milvus
+    def _resume_source(self) -> str:
+        """简历标识（用于缓存文件名），加载简历时写入，默认 default。"""
+        return getattr(self, "_resume_id", "") or "default"
 
-        embeddings = self._get_embeddings()
-        collection_name = f"resume_{self.session_id}_{self.resume.name if self.resume else 'default'}"
-
-        print(f"[RAG] 初始化 Milvus 向量存储: collection={collection_name}")
-
-        self._vector_store = Milvus(
-            embedding_function=embeddings,
-            collection_name=collection_name,
-            connection_args={
-                "host": config.milvus_host,
-                "port": config.milvus_port,
-            },
-            auto_id=True,
-            drop_old=False,
-        )
-
-        if self._chunks:
-            texts = [c.page_content for c in self._chunks]
-            metadatas = [c.metadata for c in self._chunks]
-            print(f"[RAG] 正在向量化 {len(texts)} 个文档块...")
-            self._vector_store.add_texts(texts, metadatas=metadatas)
-            print(f"[RAG] 向量化完成，已写入 Milvus")
-
-    def _search_vector(self, query: str, top_k: int = 3) -> list[Document]:
-        """向量语义检索"""
+    def _load_vector_cache(self) -> Optional[list]:
+        """读取磁盘上的块向量缓存；模型或文本对不上则视为失效。"""
+        path = self._embedding_cache_path()
+        if not path.exists():
+            return None
         try:
-            self._init_vector_store()
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            return None
+        if data.get("model") != config.embedding_model:
+            return None
+        if [c.get("text") for c in data.get("chunks", [])] != [c.page_content for c in self._chunks]:
+            return None
+        vectors = [c.get("embedding") or [] for c in data.get("chunks", [])]
+        if not vectors or any(not v for v in vectors):
+            return None
+        return vectors
 
-            if self._vector_store is None:
-                print("[RAG] Milvus 未初始化，回退到关键词匹配")
+    def _save_vector_cache(self, vectors: list):
+        path = self._embedding_cache_path()
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "model": config.embedding_model,
+                        "chunks": [
+                            {"text": chunk.page_content, "metadata": chunk.metadata, "embedding": vec}
+                            for chunk, vec in zip(self._chunks, vectors)
+                        ],
+                    },
+                    f,
+                    ensure_ascii=False,
+                )
+        except Exception as e:
+            print(f"[RAG] 块向量缓存写入失败（不影响检索）: {e}")
+
+    def _ensure_vectors(self) -> bool:
+        """确保当前简历块的向量就绪，返回是否可用。"""
+        if not self._chunks:
+            return False
+        source = self._resume_source()
+        if self._chunk_vectors is not None and self._vector_source == source:
+            return True
+
+        vectors = self._load_vector_cache()
+        if vectors is None:
+            print(f"[RAG] 正在向量化 {len(self._chunks)} 个简历块 (model={config.embedding_model})...")
+            vectors = llm_client.embed([c.page_content for c in self._chunks])
+            if len(vectors) != len(self._chunks):
+                raise RuntimeError(f"向量数量不匹配: {len(vectors)} != {len(self._chunks)}")
+            self._save_vector_cache(vectors)
+            print("[RAG] 向量化完成并已缓存")
+
+        matrix = np.array(vectors, dtype=np.float32)
+        norms = np.linalg.norm(matrix, axis=1, keepdims=True)
+        norms[norms == 0] = 1e-8
+        self._chunk_vectors = matrix / norms
+        self._vector_source = source
+        return True
+
+    def _search_vector(self, query: str, top_k: int = 3) -> list[Chunk]:
+        """向量语义检索（余弦相似度）"""
+        try:
+            if not self._ensure_vectors():
+                print("[RAG] 简历块为空，回退到关键词匹配")
                 return self._search_keyword(query, top_k)
 
-            docs = self._vector_store.similarity_search(query, k=top_k)
+            query_vecs = llm_client.embed([query])
+            if not query_vecs:
+                raise RuntimeError("query 向量为空")
+            q = np.array(query_vecs[0], dtype=np.float32)
+            q_norm = np.linalg.norm(q) or 1e-8
+            sims = self._chunk_vectors @ (q / q_norm)
+            order = np.argsort(-sims)[:top_k]
+            docs = [self._chunks[i] for i in order]
             print(f"[RAG] 向量检索: query='{query[:30]}...' → {len(docs)} 个结果")
             return docs
 
@@ -715,15 +751,17 @@ class ResumeKnowledgeBase:
         """切换检索模式"""
         if mode not in (self.MODE_KEYWORD, self.MODE_VECTOR):
             raise ValueError(f"不支持的检索模式: {mode}")
-        self.search_mode = mode
         print(f"[RAG] 检索模式切换为: {mode}")
 
         if mode == self.MODE_VECTOR:
             try:
-                self._init_vector_store()
+                if not self._ensure_vectors():
+                    raise RuntimeError("简历未加载，无法向量化")
             except Exception as e:
-                print(f"[RAG] Milvus 初始化失败，保持关键词模式: {e}")
+                print(f"[RAG] 向量索引构建失败，保持关键词模式: {e}")
                 self.search_mode = self.MODE_KEYWORD
+                return
+        self.search_mode = mode
 
     def get_context_for_question(self, question: str) -> str:
         """根据面试问题检索相关简历上下文 —— 始终返回完整简历"""

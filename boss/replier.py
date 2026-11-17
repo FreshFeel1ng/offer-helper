@@ -6,22 +6,17 @@ AI 回复生成 —— 调用 DeepSeek API 为 BOSS直聘聊天生成自动回�
 
 import json
 import re
-import sys
-from pathlib import Path
 
 # 复用 boss/llm_client.py
 from .llm_client import llm_chat_deepseek
-
 from .state import get_recent_messages, get_setting
-import httpx
-
-OLLAMA_BASE = "http://localhost:11434"
 
 
 def _needs_human_transfer(hr_message: str, conversation_id: int = 0) -> bool:
-    """用本地小模型判断 HR 是否要求转人工 / 跟真人沟通。
+    """判断 HR 是否要求转人工 / 跟真人沟通。
 
-    成功返回 True/False，Ollama 不可用时回退到关键词匹配。
+    明显表达走关键词秒判，模糊表达才让 AI 结合上下文判断；
+    AI 调用失败（未配 Key / 超时）时回退到关键词匹配。
     """
     CLASSIFY_PROMPT = (
         '你是一个我的ai求职助手，我正在用ai和hr聊天。你现在需要判断招聘平台的HR发来的消息，'
@@ -66,27 +61,15 @@ def _needs_human_transfer(hr_message: str, conversation_id: int = 0) -> bool:
             pass
     print("LLM:", user_content)
     try:
-        resp = httpx.post(
-            f"{OLLAMA_BASE}/api/chat",
-            json={
-                "model": "qwen2.5:1.5b",
-                "messages": [
-                    {"role": "system", "content": CLASSIFY_PROMPT},
-                    {"role": "user", "content": user_content},
-                ],
-                "temperature": 0.0,
-                "stream": False,
-                "options": {
-                    "num_predict": 3,  # 最多输出 3 个 token，阻止长篇推理
-                },
-            },
-            timeout=10.0,
-        )
-        resp.raise_for_status()
-        result = resp.json()["message"]["content"].strip().lower()
+        result = llm_chat_deepseek(
+            [{"role": "user", "content": user_content}],
+            system_prompt=CLASSIFY_PROMPT,
+            temperature=0.0,
+            max_tokens=3,  # 只要 yes/no，防止模型长篇推理
+        ).strip().lower()
         return result.startswith("yes")
     except Exception:
-        # Ollama 不可用 → 回退关键词
+        # AI 不可用 → 回退关键词
         keywords = ["转人工", "想跟真人", "要真人", "不要AI", "本人回复"]
         return any(kw in hr_message for kw in keywords)
 
@@ -226,11 +209,10 @@ def generate_reply(
 
     hr_lower = hr_message.strip().lower()
     if hr_lower in ("你好", "您好", "hi", "hello", "嗨", "在吗", "在吗？", "在不在", "在不在？"):
-        company = job_info.get("company", "贵公司")
         title = job_info.get("title", "相关岗位")
         desc_hint = ""
         if job_info.get("description"):
-            desc_hint = f"，看了JD感觉挺对口的"
+            desc_hint = "，看了JD感觉挺对口的"
         return {
             "reply": f"您好！看到贵司在招{title}，挺感兴趣的{desc_hint}。PS：正在和你聊的这个AI是我自己开发的，正在不断优化当中。您可以和它聊聊看，如果您觉得它还有什么不好的地方，或者有什么事情想和我聊聊，可以对他说转人工，我就能收到提示啦~",
             "interest": "low",
@@ -409,7 +391,7 @@ def generate_greeting_ai(
             {"role": "user", "content": user_prompt},
         ]
 
-        print(f"[greeting] → 调用 LLM ...")
+        print("[greeting] → 调用 LLM ...")
         raw = llm_chat_deepseek(messages, temperature=0.3)
         print(f"[greeting] LLM 返回长度={len(raw)},raw:{raw}")
         text = (raw or "").strip().strip('"').strip("'").strip()
@@ -424,7 +406,7 @@ def generate_greeting_ai(
         if len(text) > 220:
             text = text[:220]
         if re.search(r"微信|wechat|vx|\bv信\b|qq|电话|手机号|\d{11}", text, re.I):
-            print(f"[greeting] → 模板 (含联系方式被拦截)")
+            print("[greeting] → 模板 (含联系方式被拦截)")
             return generate_greeting(job_title, company, style=style, hr_name=hr_name)
 
         # smart 模式额外校验：占位符未替换完 → 回退
@@ -466,7 +448,7 @@ def _build_generic_prompt(
 
     if job_desc and len(job_desc.strip()) >= 20:
         try:
-            from .rag import similar_jds, build_rag_context
+            from .rag import build_rag_context, similar_jds
             similar = similar_jds(job_desc, limit=3)
             rag = build_rag_context(similar, "greeting")
             if rag:
@@ -489,7 +471,7 @@ def _build_smart_prompts(job_title, company, hr_name, job_desc, is_boss, resume_
     rag_context = ""
     if job_desc and len(job_desc.strip()) >= 20:
         try:
-            from .rag import similar_jds, build_rag_context
+            from .rag import build_rag_context, similar_jds
             similar = similar_jds(job_desc, limit=3)
             rag_context = build_rag_context(similar, "greeting")
         except Exception:

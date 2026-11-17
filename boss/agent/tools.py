@@ -16,13 +16,9 @@
     result = await registry.execute("search_jobs", {"keyword": "AI", "city": "广州"})
 """
 
-import json
-import sys
-import time
 import datetime
-import re as _re
+import json
 from collections import defaultdict
-from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import urljoin
 
@@ -155,7 +151,7 @@ def summarize_result(result: Any, max_len: int = 2000) -> str:
                 line += f"  💬 {last[:60]}"
             lines.append(line)
         text = "\n".join(lines)
-        return text[:max_len] + (f"\n...(截断)" if len(text) > max_len else "")
+        return text[:max_len] + ("\n...(截断)" if len(text) > max_len else "")
 
     # ── 聊天记录 → 精简格式 ──
     if isinstance(result, dict) and "messages" in result:
@@ -165,7 +161,7 @@ def summarize_result(result: Any, max_len: int = 2000) -> str:
             content = (m.get("content") or "")[:80]
             lines.append(f"  [{sender}] {content}")
         text = "\n".join(lines)
-        return text[:max_len] + (f"\n...(截断)" if len(text) > max_len else "")
+        return text[:max_len] + ("\n...(截断)" if len(text) > max_len else "")
 
     # ── 公司画像 → 紧凑排名 ──
     if isinstance(result, dict) and "companies" in result:
@@ -175,7 +171,7 @@ def summarize_result(result: Any, max_len: int = 2000) -> str:
             sample = c.get("sample_job", {})
             lines.append(f"{i}. {c.get('company','?')}  {c.get('position_count',0)}个岗位 | HR: {hr.get('name','?')}({hr.get('title','?')}) | 例: {sample.get('title','')} {sample.get('salary','')}")
         text = "\n".join(lines)
-        return text[:max_len] + (f"\n...(截断)" if len(text) > max_len else "")
+        return text[:max_len] + ("\n...(截断)" if len(text) > max_len else "")
 
     # ── 兜底: JSON dump ──
     text = json.dumps(result, ensure_ascii=False, default=str)
@@ -391,7 +387,7 @@ async def analyze_jd(job_url: str) -> dict:
 # match_context: 可选，传入 analyze_jd 的结果（gaps/key_skills/match_points），跳过 JD 重分析
 async def optimize_resume_for_jd(job_url: str, match_context: dict = None) -> dict:
     try:
-        from ..state import get_application_by_url, get_setting, get_db
+        from ..state import get_application_by_url, get_db, get_setting
 
         job = get_application_by_url(_norm_url(job_url))
         if not job:
@@ -551,7 +547,7 @@ async def apply_job(job_url: str) -> dict:
 
     # 日限检查
     try:
-        from ..state import get_today_application_count, get_setting
+        from ..state import get_setting, get_today_application_count
 
         daily_limit = int(get_setting("daily_apply_limit", "15"))
         if get_today_application_count() >= daily_limit:
@@ -610,7 +606,7 @@ async def batch_apply(job_urls: str) -> dict:
         return {"error": "job_urls 为空"}
 
     try:
-        from ..state import get_today_application_count, get_setting
+        from ..state import get_setting, get_today_application_count
 
         daily_limit = int(get_setting("daily_apply_limit", "15"))
         remaining = daily_limit - get_today_application_count()
@@ -696,8 +692,8 @@ async def get_chat_messages(conv_id: int) -> dict:
 # 依赖: 浏览器 ❌  |  AI ✅ |  需人工确认后通过其他途径发送
 async def generate_reply(conv_id: int) -> dict:
     try:
-        from ..state import get_conversation, get_recent_messages, get_setting, get_application
         from ..replier import generate_reply as _gen_reply
+        from ..state import get_application, get_conversation, get_recent_messages, get_setting
 
         conv = get_conversation(conv_id)
         if not conv:
@@ -764,12 +760,12 @@ async def get_status() -> dict:
 async def get_stats() -> dict:
     try:
         from ..state import (
-            get_today_application_count,
-            get_today_pending_count,
             count_hours_replied_in_range,
             count_interest_level,
-            list_active_conversations,
             get_daily_stats,
+            get_today_application_count,
+            get_today_pending_count,
+            list_active_conversations,
         )
 
         return {
@@ -807,7 +803,7 @@ async def preview_companies(keyword: str, city: str = "全国") -> dict:
     if not jobs:
         return {"message": f"搜索'{keyword}'无结果", "companies": []}
 
-    from ..automation import pick_top_hr, _hr_title_score
+    from ..automation import _hr_title_score, pick_top_hr
 
     groups: dict = defaultdict(list)
     for j in jobs:
@@ -930,7 +926,7 @@ def register_all(registry: ToolRegistry) -> ToolRegistry:
     }, preview_companies)
 
     # ── ⚡ 复合技能（3个）──
-    from .skills import smart_scan, prepare_application, smart_apply
+    from .skills import prepare_application, smart_apply, smart_scan
 
     registry.register("smart_scan",
         "【推荐优先使用】智能搜索+批量分析。搜索岗位并自动对TOP结果做AI匹配度分析，返回按分数排名的列表。一步替代 search_jobs+get_job_detail×N+analyze_jd×N 的多轮操作。", {

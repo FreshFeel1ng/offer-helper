@@ -1,84 +1,15 @@
-"""
-面试助手核心 Agent
+"""面试助手核心 Agent
 
-基于 LangChain + LLM，生成既专业又口语化的面试回答。
-兼容 offer-helper 的 LLM 配置体系。
+直接拼 OpenAI 兼容的 messages 调 LLM（见 llm_client），不依赖 LangChain。
+根据问题类型切换回答策略，并在需要时注入简历上下文。
 """
+
 import time
-from typing import AsyncGenerator, Optional
+from typing import AsyncGenerator
 
-import tiktoken
-from langchain_openai import ChatOpenAI
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.messages import HumanMessage, AIMessage
-from langchain_core.callbacks import BaseCallbackHandler
-
-from .config import config
+from . import llm_client
 from .classifier import classify_question, get_answer_strategy
-
-
-class _TokenLogger(BaseCallbackHandler):
-    """LangChain 回调：记录 LLM 每次调用的 token 用量"""
-
-    def __init__(self):
-        self._t0 = None
-
-    def on_llm_start(self, serialized, prompts, **kwargs):
-        self._t0 = time.time()
-
-    def on_llm_end(self, response, **kwargs):
-        elapsed = time.time() - (self._t0 or time.time())
-        usage = {}
-        # 新版 LangChain stream_usage=True 时存放在 llm_output
-        if hasattr(response, 'llm_output') and response.llm_output:
-            usage = response.llm_output.get('token_usage', response.llm_output)
-        if not usage and hasattr(response, 'response_metadata'):
-            usage = response.response_metadata.get('token_usage', {})
-        if not usage and hasattr(response, 'generations') and response.generations:
-            gen = response.generations[0][0]
-            if hasattr(gen, 'generation_info'):
-                usage = gen.generation_info or {}
-            # stream_usage 场景下 usage 可能在 message 的 usage_metadata 中
-            if not usage and hasattr(gen, 'message'):
-                msg = gen.message
-                if hasattr(msg, 'usage_metadata') and msg.usage_metadata:
-                    usage = msg.usage_metadata
-                elif hasattr(msg, 'response_metadata'):
-                    usage = msg.response_metadata.get('token_usage', {})
-
-        prompt_tok = usage.get('prompt_tokens', 0) or usage.get('input_tokens', 0) or 0
-        completion_tok = usage.get('completion_tokens', 0) or usage.get('output_tokens', 0) or 0
-        total_tok = usage.get('total_tokens', 0) or (prompt_tok + completion_tok)
-
-        if total_tok > 0:
-            try:
-                from boss.state import save_token_usage
-                save_token_usage(
-                    model=config.llm_model,
-                    source="interview_assistant",
-                    prompt_tokens=prompt_tok,
-                    completion_tokens=completion_tok,
-                    total_tokens=total_tok,
-                    elapsed_ms=round(elapsed * 1000, 0),
-                )
-                print(f"[LLM TOKEN] assistant/{config.llm_model}: {total_tok}t OK")
-            except Exception as e:
-                print(f"[LLM TOKEN] assistant save failed: {e}")
-        else:
-            print(f"[LLM TOKEN] assistant/{config.llm_model}: 未获取到 token 用量 (usage={usage})")
-
-        self._t0 = None
-
-
-def _count_tokens(text: str, model: str = "gpt-4") -> int:
-    """用 tiktoken 估算文本 token 数。DeepSeek 兼容 OpenAI tokenizer。"""
-    try:
-        enc = tiktoken.encoding_for_model(model)
-    except Exception:
-        enc = tiktoken.get_encoding("cl100k_base")
-    return len(enc.encode(text))
-
+from .config import config
 
 SYSTEM_PROMPT_TEMPLATE = """你是一个面试辅助 AI，帮助在面试中的候选人现场生成回答。
 
@@ -106,30 +37,70 @@ SYSTEM_PROMPT_TEMPLATE = """你是一个面试辅助 AI，帮助在面试中的�
 - 类别：{questionCategory}
 - 策略：{answerStrategy}"""
 
+USER_PROMPT_TEMPLATE = "面试官刚才问了这个问题，请帮我生成一个自然的回答：\n{question}"
+
+
+def _save_token_usage(prompt_texts: list, completion_text: str, elapsed_ms: float):
+    """记录本次调用的 token 用量（估算值）。"""
+    try:
+        from boss.state import save_token_usage
+
+        prompt_tokens = sum(llm_client.estimate_tokens(t) for t in prompt_texts if t)
+        completion_tokens = llm_client.estimate_tokens(completion_text)
+        total_tokens = prompt_tokens + completion_tokens
+        if total_tokens <= 0:
+            print(f"[LLM TOKEN] assistant/{config.llm_model}: 内容为空，跳过统计")
+            return
+        save_token_usage(
+            model=config.llm_model,
+            source="interview_assistant",
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=total_tokens,
+            elapsed_ms=elapsed_ms,
+        )
+        print(
+            f"[LLM TOKEN] assistant/{config.llm_model}: prompt={prompt_tokens} "
+            f"completion={completion_tokens} total={total_tokens} OK"
+        )
+    except Exception as e:
+        print(f"[LLM TOKEN] assistant save failed: {e}")
+
 
 class InterviewAgent:
     """面试助手 Agent"""
 
     def __init__(self):
-        self.llm = ChatOpenAI(
-            model=config.llm_model,
-            temperature=config.temperature,
-            max_tokens=config.max_tokens,
-            api_key=config.deepseek_api_key,
-            base_url=config.deepseek_base_url,
-        )
-        # 用简单的列表存储对话历史
+        # 对话历史：[{"role": "user"/"assistant", "content": "..."}]
         self.chat_history: list = []
         # 简历知识库（由 session 注入）
         self.resume_kb = None
 
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", SYSTEM_PROMPT_TEMPLATE),
-            MessagesPlaceholder("chat_history"),
-            ("human", "面试官刚才问了这个问题，请帮我生成一个自然的回答：\n{question}"),
-        ])
+    def _build_messages(
+        self,
+        question: str,
+        interview_type: str,
+        language: str,
+        resume_context: str,
+    ) -> list:
+        classification = classify_question(question)
+        system_prompt = SYSTEM_PROMPT_TEMPLATE.format(
+            resumeContext=resume_context or "暂无候选人简历信息，请根据通用知识回答。",
+            interviewType=interview_type,
+            language=language,
+            questionCategory=classification.category.value,
+            answerStrategy=get_answer_strategy(classification.category),
+        )
+        return (
+            [{"role": "system", "content": system_prompt}]
+            + list(self.chat_history)
+            + [{"role": "user", "content": USER_PROMPT_TEMPLATE.format(question=question)}]
+        )
 
-        self.chain = prompt | self.llm | StrOutputParser()
+    def _resume_context(self, question: str) -> str:
+        if self.resume_kb:
+            return self.resume_kb.get_context_for_question(question)
+        return ""
 
     async def generate_answer(
         self,
@@ -138,29 +109,20 @@ class InterviewAgent:
         candidate_background: str = "全栈开发工程师",
         language: str = "zh",
     ) -> str:
-        """生成面试回答"""
-        classification = classify_question(question)
+        """生成面试回答（一次性返回）"""
+        resume_context = self._resume_context(question)
+        messages = self._build_messages(question, interview_type, language, resume_context)
 
-        # 检索简历相关上下文
-        resume_context = ""
-        if self.resume_kb:
-            resume_context = self.resume_kb.get_context_for_question(question)
+        t0 = time.time()
+        response = await llm_client.achat(
+            messages,
+            temperature=config.temperature,
+            max_tokens=config.max_tokens,
+        )
 
-        response = await self.chain.ainvoke({
-            "question": question,
-            "chat_history": self.chat_history,
-            "interviewType": interview_type,
-            "candidateBackground": candidate_background,
-            "language": language,
-            "questionCategory": classification.category.value,
-            "answerStrategy": get_answer_strategy(classification.category),
-            "resumeContext": resume_context if resume_context else "暂无候选人简历信息，请根据通用知识回答。",
-        })
-
-        # 保存到历史
-        self.chat_history.append(HumanMessage(content=question))
-        self.chat_history.append(AIMessage(content=response))
-
+        self.chat_history.append({"role": "user", "content": question})
+        self.chat_history.append({"role": "assistant", "content": response})
+        _save_token_usage([m["content"] for m in messages], response, round((time.time() - t0) * 1000, 0))
         return response
 
     async def generate_answer_stream(
@@ -171,86 +133,31 @@ class InterviewAgent:
         language: str = "zh",
     ) -> AsyncGenerator[str, None]:
         """流式生成面试回答"""
-        import time as _time
-
-        streaming_llm = ChatOpenAI(
-            model=config.llm_model,
-            temperature=config.temperature,
-            max_tokens=config.max_tokens,
-            api_key=config.deepseek_api_key,
-            base_url=config.deepseek_base_url,
-            streaming=True,
-        )
-
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", SYSTEM_PROMPT_TEMPLATE),
-            MessagesPlaceholder("chat_history"),
-            ("human", "面试官刚才问了这个问题，请帮我生成一个自然的回答：\n{question}"),
-        ])
-
-        chain = prompt | streaming_llm | StrOutputParser()
-
-        classification = classify_question(question)
-
-        # 检索简历相关上下文
-        resume_context = ""
-        if self.resume_kb and self.resume_kb.resume:
-            resume_context = self.resume_kb.get_context_for_question(question)
+        resume_context = self._resume_context(question)
+        if resume_context:
             print(f"[Agent] 检索到简历上下文: {len(resume_context)} 字符")
         else:
-            print(f"[Agent] 简历知识库未加载")
+            print("[Agent] 简历知识库未加载")
 
-        input_vars = {
-            "question": question,
-            "chat_history": self.chat_history,
-            "interviewType": interview_type,
-            "candidateBackground": candidate_background,
-            "language": language,
-            "questionCategory": classification.category.value,
-            "answerStrategy": get_answer_strategy(classification.category),
-            "resumeContext": resume_context if resume_context else "暂无候选人简历信息，请根据通用知识回答。",
-        }
+        messages = self._build_messages(question, interview_type, language, resume_context)
 
-        # 计算 prompt tokens (用 tiktoken 估算)
-        try:
-            prompt_tokens = _count_tokens(SYSTEM_PROMPT_TEMPLATE)
-            for msg in self.chat_history:
-                prompt_tokens += _count_tokens(str(msg.content))
-            for val in input_vars.values():
-                if isinstance(val, str):
-                    prompt_tokens += _count_tokens(val)
-        except Exception:
-            prompt_tokens = 0
-
-        t0 = _time.time()
+        t0 = time.time()
         full_response = ""
-        async for chunk in chain.astream(input_vars):
+        async for chunk in llm_client.achat_stream(
+            messages,
+            temperature=config.temperature,
+            max_tokens=config.max_tokens,
+        ):
             full_response += chunk
             yield chunk
 
-        elapsed = _time.time() - t0
-
-        # 计算 completion tokens 并保存
-        try:
-            completion_tokens = _count_tokens(full_response)
-            total_tokens = prompt_tokens + completion_tokens
-            if total_tokens > 0:
-                from boss.state import save_token_usage
-                save_token_usage(
-                    model=config.llm_model,
-                    source="interview_assistant",
-                    prompt_tokens=prompt_tokens,
-                    completion_tokens=completion_tokens,
-                    total_tokens=total_tokens,
-                    elapsed_ms=round(elapsed * 1000, 0),
-                )
-                print(f"[LLM TOKEN] assistant/{config.llm_model}: prompt={prompt_tokens} completion={completion_tokens} total={total_tokens} OK")
-        except Exception as e:
-            print(f"[LLM TOKEN] assistant save failed: {e}")
+        elapsed_ms = round((time.time() - t0) * 1000, 0)
 
         # 保存到历史
-        self.chat_history.append(HumanMessage(content=question))
-        self.chat_history.append(AIMessage(content=full_response))
+        self.chat_history.append({"role": "user", "content": question})
+        self.chat_history.append({"role": "assistant", "content": full_response})
+
+        _save_token_usage([m["content"] for m in messages], full_response, elapsed_ms)
 
     def clear_memory(self):
         self.chat_history.clear()

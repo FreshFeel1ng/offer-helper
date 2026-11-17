@@ -9,70 +9,101 @@ BOSS直聘自动化控制台 —— FastAPI 后端
 import argparse
 import asyncio
 import json
-import os
 import random
 import re
-
-
 import subprocess
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Optional, List
+from typing import List, Optional
 from urllib.parse import urljoin
 
 # 确保项目根目录在 sys.path 中，解决 boss.state / interview.xxx 等跨包导入
-
 from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from .agent.loop import AgentLoop
+from .agent.tools import ToolContext, ToolRegistry, register_all
 from .automation import BossAutomation
+from .replier import generate_greeting_ai
 from .state import (
     add_application,
-    get_application,
-    get_application_by_url,
-    update_application_from_job,
-    list_applications,
-    update_application_status,
-    get_today_application_count,
-    get_or_create_conversation,
-    get_conversation,
-    list_active_conversations,
     add_message,
-    get_messages,
-    replace_conversation_messages,
-    update_conversation_last_message,
-    update_conversation_status,
-    set_auto_reply,
-    get_setting,
-    set_setting,
-    get_all_settings,
-    get_daily_stats,
-    get_wechat_exchanges,
-    get_transfer_requests,
-    get_today_pending_count,
+    add_to_shortlist,
+    company_already_applied,
     count_hours_replied_in_range,
     count_interest_level,
-    add_to_shortlist,
-    remove_from_shortlist,
-    list_shortlists,
+    get_all_settings,
+    get_application,
+    get_application_by_url,
+    get_conversation,
+    get_daily_stats,
+    get_messages,
+    get_setting,
+    get_today_application_count,
+    get_today_pending_count,
+    get_transfer_requests,
+    get_wechat_exchanges,
     is_in_shortlist,
-    list_jobs_by_company,
-    list_companies_by_position_count,
-    company_already_applied,
+    list_active_conversations,
+    list_applications,
+    list_shortlists,
+    remove_from_shortlist,
+    replace_conversation_messages,
+    set_auto_reply,
+    set_setting,
+    update_application_from_job,
+    update_application_status,
+    update_conversation_last_message,
+    update_conversation_status,
 )
-from .replier import generate_greeting, generate_greeting_ai
-from .company import build_company_preview, rank_companies_by_position_count
-from .agent.tools import ToolRegistry, ToolContext, register_all
-from .agent.loop import AgentLoop
+
 
 # ── FastAPI 应用 ──
-app = FastAPI(title="BOSS直聘自动化控制台", version="1.0.0")
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """启动时：建浏览器锁 + 清理垃圾会话；只有浏览器已在跑时才拉起监控循环。"""
+    global monitor_task, browser_sync_lock
+    browser_sync_lock = asyncio.Lock()
+    # 清理旧垃圾会话 + 合并同名重复会话
+    try:
+        from boss.state import get_db
+
+        db = get_db()
+        junk_names = [
+            "HR",
+            "你好",
+            "消息",
+            "未知HR",
+            "AI简历",
+            "简历更新",
+            "附件简历制作",
+            "附件上传",
+        ]
+        for name in junk_names:
+            db.execute("DELETE FROM conversations WHERE hr_name = ?", (name,))
+        db.execute("DELETE FROM conversations WHERE hr_name IS NULL OR length(hr_name) < 2")
+        # 合并同名重复：保留最早的，把重复的改成 closed
+        db.execute("""
+            UPDATE conversations SET status = 'closed'
+            WHERE id NOT IN (
+                SELECT MIN(id) FROM conversations WHERE status != 'closed' GROUP BY hr_name
+            ) AND status != 'closed'
+        """)
+        db.commit()
+    except Exception:
+        pass
+    if automation is not None and automation.page is not None:
+        monitor_task = asyncio.create_task(chat_monitor_loop())
+    yield
+
+
+app = FastAPI(title="BOSS直聘自动化控制台", version="1.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -127,42 +158,6 @@ def _get_cached_headers() -> Optional[dict]:
         out.pop("_ts", None)
         return out if out else None
     return None
-
-
-@app.on_event("startup")
-async def on_startup():
-    global automation, monitor_task, browser_sync_lock
-    browser_sync_lock = asyncio.Lock()
-    # 清理旧垃圾会话 + 合并同名重复会话
-    try:
-        from boss.state import get_db
-
-        db = get_db()
-        junk_names = [
-            "HR",
-            "你好",
-            "消息",
-            "未知HR",
-            "AI简历",
-            "简历更新",
-            "附件简历制作",
-            "附件上传",
-        ]
-        for name in junk_names:
-            db.execute("DELETE FROM conversations WHERE hr_name = %s", (name,))
-        db.execute("DELETE FROM conversations WHERE hr_name IS NULL OR length(hr_name) < 2")
-        # 合并同名重复：保留最早的，把重复的改成 closed
-        db.execute("""
-            UPDATE conversations SET status = 'closed'
-            WHERE id NOT IN (
-                SELECT MIN(id) FROM conversations WHERE status != 'closed' GROUP BY hr_name
-            ) AND status != 'closed'
-        """)
-        db.commit()
-    except Exception:
-        pass
-    if automation is not None and automation.page is not None:
-        monitor_task = asyncio.create_task(chat_monitor_loop())
 
 
 # Playwright 同步 API 要求所有操作在同一线程 —— 用单线程池保证
@@ -544,7 +539,6 @@ def get_stats():
 @app.get("/api/doctor")
 def doctor():
     """诊断环境：Python版本、浏览器状态、登录态、AI配置等。"""
-    import os
     import sys as _sys
 
     try:
@@ -1002,9 +996,11 @@ async def search_jobs(req: SearchRequest):
                                 k["legal_rep"] = legal
                                 k["is_boss"] = (k.get("hr_name") or "") == legal
                         if j.get("url"):
+                            from .state import get_db
+
                             db = get_db()
                             db.execute(
-                                "UPDATE applications SET legal_rep=%s, is_boss=%s WHERE job_url=%s",
+                                "UPDATE applications SET legal_rep=?, is_boss=? WHERE job_url=?",
                                 (legal, 1 if (j.get("hr_name") or "") == legal else 0, j["url"]),
                             )
                             db.commit()
@@ -1123,7 +1119,8 @@ async def api_companies_preview(
 
     # 2) 写库 + 按公司分组（每家保留完整岗位信息）
     from collections import defaultdict
-    from boss.automation import pick_top_hr, _hr_title_score
+
+    from boss.automation import _hr_title_score, pick_top_hr
 
     groups: dict = defaultdict(list)  # key=(company, company_id) → [job_dict, ...]
     for j in jobs:
@@ -1621,11 +1618,12 @@ async def optimize_resume(req: OptimizeResumeRequest):
             company = company or existing.get("company", "")
 
     import datetime
+
     from boss.state import get_db
 
     db = get_db()
     row = db.execute(
-        "SELECT optimize_result, optimize_at FROM applications WHERE job_url=%s",
+        "SELECT optimize_result, optimize_at FROM applications WHERE job_url=?",
         (req.job_url,),
     ).fetchone()
     cached_result = None
@@ -1644,14 +1642,13 @@ async def optimize_resume(req: OptimizeResumeRequest):
             except Exception:
                 pass
 
-    # RAG: 检索历史相似JD经验
-    from boss.rag import similar_jds, build_rag_context, ensure_jd_embedding
+    # RAG: 检索历史相似JD经验（一次向量化，入库与检索共用，避免重复调用 embedding 接口）
+    from boss.rag import build_rag_context, ensure_jd_embedding, similar_jds
     desc = desc.strip()
-    if desc and req.job_url:
-        ensure_jd_embedding(req.job_url, desc)
     rag_context = ""
     if desc:
-        similar = similar_jds(desc, limit=3, exclude_url=req.job_url or "")
+        jd_vec = ensure_jd_embedding(req.job_url, desc) if req.job_url else None
+        similar = similar_jds(desc, limit=3, exclude_url=req.job_url or "", query_vec=jd_vec)
         rag_context = build_rag_context(similar, "optimize")
 
     prompt = f"""你是站在求职者一侧的简历审计官和优化专家。根据以下岗位JD，生成简历优化建议。
@@ -1694,7 +1691,6 @@ async def optimize_resume(req: OptimizeResumeRequest):
             system_prompt="你是求职简历优化专家，输出严格JSON，用简体中文。",
             temperature=0.4,
         )
-        import json
 
         raw = raw.strip()
         if raw.startswith("```"):
@@ -1706,7 +1702,7 @@ async def optimize_resume(req: OptimizeResumeRequest):
         result = json.loads(raw)
         try:
             db.execute(
-                "UPDATE applications SET optimize_result=%s, optimize_at=CURRENT_TIMESTAMP WHERE job_url=%s",
+                "UPDATE applications SET optimize_result=?, optimize_at=CURRENT_TIMESTAMP WHERE job_url=?",
                 (json.dumps(result, ensure_ascii=False), req.job_url),
             )
             db.commit()
@@ -1750,11 +1746,12 @@ async def chat_suggestion(req: ChatSuggestionRequest):
             is_boss = is_boss or bool(existing.get("is_boss"))
 
     import datetime
+
     from boss.state import get_db
 
     db = get_db()
     row = db.execute(
-        "SELECT chat_suggestion_result, chat_suggestion_at FROM applications WHERE job_url=%s",
+        "SELECT chat_suggestion_result, chat_suggestion_at FROM applications WHERE job_url=?",
         (req.job_url,),
     ).fetchone()
     cached_result = None
@@ -1775,14 +1772,13 @@ async def chat_suggestion(req: ChatSuggestionRequest):
 
     resume = get_setting("resume_summary", "")
 
-    # RAG: 检索历史相似JD经验
-    from boss.rag import similar_jds, build_rag_context, ensure_jd_embedding
+    # RAG: 检索历史相似JD经验（一次向量化，入库与检索共用，避免重复调用 embedding 接口）
+    from boss.rag import build_rag_context, ensure_jd_embedding, similar_jds
     desc = desc.strip()
-    if desc and req.job_url:
-        ensure_jd_embedding(req.job_url, desc)
     rag_context = ""
     if desc:
-        similar = similar_jds(desc, limit=3, exclude_url=req.job_url or "")
+        jd_vec = ensure_jd_embedding(req.job_url, desc) if req.job_url else None
+        similar = similar_jds(desc, limit=3, exclude_url=req.job_url or "", query_vec=jd_vec)
         rag_context = build_rag_context(similar, "chat")
 
     boss_hint = "对方很可能是公司老板/法人本人，语气要更诚意、更直接" if is_boss else ""
@@ -1832,7 +1828,6 @@ async def chat_suggestion(req: ChatSuggestionRequest):
             system_prompt="你是求职沟通教练，输出严格JSON，用简体中文。",
             temperature=0.6,
         )
-        import json as _json
 
         raw = raw.strip()
         if raw.startswith("```"):
@@ -1841,11 +1836,11 @@ async def chat_suggestion(req: ChatSuggestionRequest):
             raw = raw[4:].strip()
         if raw.lower().startswith("```json"):
             raw = raw[7:].strip()
-        result = _json.loads(raw)
+        result = json.loads(raw)
         try:
             db.execute(
-                "UPDATE applications SET chat_suggestion_result=%s, chat_suggestion_at=CURRENT_TIMESTAMP WHERE job_url=%s",
-                (_json.dumps(result, ensure_ascii=False), req.job_url),
+                "UPDATE applications SET chat_suggestion_result=?, chat_suggestion_at=CURRENT_TIMESTAMP WHERE job_url=?",
+                (json.dumps(result, ensure_ascii=False), req.job_url),
             )
             db.commit()
         except Exception:
@@ -2097,7 +2092,6 @@ def geo_cities(force: bool = False):
 @app.get("/api/debug/auth")
 async def debug_auth():
     """临时调试端点：查看缓存的鉴权状态。"""
-    from boss.geo import resolve_city_code
 
     cached = _get_cached_headers()
     zp_ok = bool(cached and cached.get("zp_token"))
@@ -2126,8 +2120,9 @@ async def geo_districts(city: str, force: bool = False):
     if not city:
         raise HTTPException(status_code=400, detail="缺少 city 参数")
     try:
-        from boss.geo import resolve_city_code, _parse_districts, _cache, get_districts
         import time as _time
+
+        from boss.geo import _cache, _parse_districts, get_districts, resolve_city_code
 
         city_code = resolve_city_code(city)
         if not city_code:
@@ -2200,7 +2195,7 @@ async def geo_areas(city: str):
     if not city:
         raise HTTPException(status_code=400, detail="缺少 city 参数")
     try:
-        from boss.geo import resolve_city_code, _cache
+        from boss.geo import _cache, resolve_city_code
 
         city_code = resolve_city_code(city)
         if not city_code:
@@ -2281,7 +2276,11 @@ def agent_list_tools():
     register_all(registry)
     return {
         "tools": [
-            {"name": t["name"], "description": t["description"], "parameters": t["parameters"]}
+            {
+                "name": t["function"]["name"],
+                "description": t["function"]["description"],
+                "parameters": t["function"]["parameters"],
+            }
             for t in registry.get_openai_schema()
         ]
     }
@@ -2649,13 +2648,10 @@ def mock_detail(mock_id: int):
 @app.delete("/api/mock/{mock_id}")
 def mock_delete(mock_id: int):
     """删除模拟面试记录"""
-    from .state import get_db
+    from .state import delete_mock_interview
+
     try:
-        db = get_db()
-        cur = db.cursor()
-        cur.execute("DELETE FROM mock_interviews WHERE id = %s", (mock_id,))
-        db.commit()
-        cur.close()
+        delete_mock_interview(mock_id)
         return {"ok": True}
     except Exception as e:
         print(f"[Mock面试] 删除失败: {e}")
@@ -2737,7 +2733,7 @@ async def assistant_start():
         )
         await asyncio.sleep(2)
         if _assistant_process.poll() is not None:
-            print(f"[面试助手] ❌ 子进程启动后立即退出")
+            print("[面试助手] ❌ 子进程启动后立即退出")
             return {"status": "failed", "detail": "子进程启动后立即退出"}
         print(f"[面试助手] ✅ 子进程启动成功 (PID={_assistant_process.pid})")
         return {"status": "started", "port": _ASSISTANT_PORT}
@@ -2759,11 +2755,11 @@ async def assistant_stop():
             try:
                 _assistant_process.wait(timeout=5)
             except subprocess.TimeoutExpired:
-                print(f"[面试助手] 子进程未响应, 强制终止...")
+                print("[面试助手] 子进程未响应, 强制终止...")
                 _assistant_process.kill()
                 _assistant_process.wait()
         _assistant_process = None
-        print(f"[面试助手] ✅ 子进程已停止")
+        print("[面试助手] ✅ 子进程已停止")
         _free_port(_ASSISTANT_PORT)
         return {"status": "stopped"}
     except Exception as e:

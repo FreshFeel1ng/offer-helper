@@ -1,174 +1,160 @@
 -- ============================================================
--- offer-helper PostgreSQL 建表语句
--- 使用方式: psql -U <user> -d <database> -f schema.sql
+-- offer-helper SQLite 建表语句（参考用）
+-- 说明：程序启动时 boss/state.py 会自动建表 + 补列，无需手动执行。
+-- 如需手工建库：sqlite3 .boss_profile/boss_state.db < schema.sql
 -- ============================================================
 
 -- 1. 投递记录
 CREATE TABLE IF NOT EXISTS applications (
-    id              SERIAL PRIMARY KEY,
-    job_title       VARCHAR(256)  NOT NULL DEFAULT '',
-    company         VARCHAR(256)  NOT NULL DEFAULT '',
-    company_id      VARCHAR(64)   NOT NULL DEFAULT '',
-    salary          VARCHAR(64)   NOT NULL DEFAULT '',
-    job_url         TEXT          NOT NULL DEFAULT '',
-    city            VARCHAR(64)   NOT NULL DEFAULT '',
-    experience      VARCHAR(32)   NOT NULL DEFAULT '',
-    education       VARCHAR(32)   NOT NULL DEFAULT '',
-    hr_name         VARCHAR(64)   NOT NULL DEFAULT '',
-    hr_title        VARCHAR(128)  NOT NULL DEFAULT '',
-    hr_active       VARCHAR(32)   NOT NULL DEFAULT '',
-    description     TEXT          NOT NULL DEFAULT '',
-    legal_rep       VARCHAR(64)   NOT NULL DEFAULT '',
-    is_boss         SMALLINT      NOT NULL DEFAULT 0,
-    area_district   VARCHAR(64)   NOT NULL DEFAULT '',
-    business_district VARCHAR(128) NOT NULL DEFAULT '',
-    company_size    VARCHAR(32)   NOT NULL DEFAULT '',
-    industry        VARCHAR(128)  NOT NULL DEFAULT '',
-    status          VARCHAR(16)   NOT NULL DEFAULT 'pending',
-    greeting_text   TEXT          NOT NULL DEFAULT '',
-    greeting_sent_at TIMESTAMPTZ,
-    embedding       JSONB,
-    optimize_result TEXT          NOT NULL DEFAULT '',
-    optimize_at     TIMESTAMPTZ,
-    chat_suggestion_result TEXT   NOT NULL DEFAULT '',
-    chat_suggestion_at TIMESTAMPTZ,
-    created_at      TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
-    updated_at      TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
-    CONSTRAINT uq_applications_job_url UNIQUE (job_url)
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_title               TEXT    NOT NULL DEFAULT '',
+    company                 TEXT    NOT NULL DEFAULT '',
+    company_id              TEXT    NOT NULL DEFAULT '',
+    salary                  TEXT    NOT NULL DEFAULT '',
+    job_url                 TEXT    NOT NULL DEFAULT '',
+    city                    TEXT    NOT NULL DEFAULT '',
+    experience              TEXT    NOT NULL DEFAULT '',
+    education               TEXT    NOT NULL DEFAULT '',
+    hr_name                 TEXT    NOT NULL DEFAULT '',
+    hr_title                TEXT    NOT NULL DEFAULT '',
+    hr_active               TEXT    NOT NULL DEFAULT '',
+    description             TEXT    NOT NULL DEFAULT '',
+    legal_rep               TEXT    NOT NULL DEFAULT '',
+    is_boss                 INTEGER NOT NULL DEFAULT 0,
+    area_district           TEXT    NOT NULL DEFAULT '',
+    business_district       TEXT    NOT NULL DEFAULT '',
+    company_size            TEXT    NOT NULL DEFAULT '',
+    industry                TEXT    NOT NULL DEFAULT '',
+    status                  TEXT    NOT NULL DEFAULT 'pending',
+    greeting_text           TEXT    NOT NULL DEFAULT '',
+    greeting_sent_at        TEXT,
+    embedding               TEXT,
+    optimize_result         TEXT    NOT NULL DEFAULT '',
+    optimize_at             TEXT,
+    chat_suggestion_result  TEXT    NOT NULL DEFAULT '',
+    chat_suggestion_at      TEXT,
+    created_at              TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at              TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
-CREATE INDEX IF NOT EXISTS idx_apps_status   ON applications (status);
-CREATE INDEX IF NOT EXISTS idx_apps_company  ON applications (company);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_applications_job_url
+    ON applications (job_url) WHERE job_url != '';
+CREATE INDEX IF NOT EXISTS idx_apps_status     ON applications (status);
+CREATE INDEX IF NOT EXISTS idx_apps_company    ON applications (company);
 CREATE INDEX IF NOT EXISTS idx_apps_company_id ON applications (company_id);
 
 -- 2. HR 会话
 CREATE TABLE IF NOT EXISTS conversations (
-    id                  SERIAL PRIMARY KEY,
-    application_id      INTEGER       REFERENCES applications(id) ON DELETE SET NULL,
-    hr_name             VARCHAR(64)   NOT NULL DEFAULT '',
-    hr_company          VARCHAR(256)  NOT NULL DEFAULT '',
-    job_title           VARCHAR(256)  NOT NULL DEFAULT '',
-    last_message_text   TEXT          NOT NULL DEFAULT '',
-    last_message_from   VARCHAR(8)    NOT NULL DEFAULT 'hr',
-    last_message_at     TIMESTAMPTZ,
-    unread_count        INTEGER       NOT NULL DEFAULT 0,
-    status              VARCHAR(16)   NOT NULL DEFAULT 'active',
-    interest_level      VARCHAR(16)   NOT NULL DEFAULT '',
-    hr_wechat           VARCHAR(64)   NOT NULL DEFAULT '',
-    wechat_shared_at    TIMESTAMPTZ,
-    resume_sent         SMALLINT      NOT NULL DEFAULT 0,
-    phone_shared        SMALLINT      NOT NULL DEFAULT 0,
-    transfer_requested  SMALLINT      NOT NULL DEFAULT 0,
-    transfer_requested_at TIMESTAMPTZ,
-    auto_reply_enabled  SMALLINT      NOT NULL DEFAULT 1,
-    has_unreplied       SMALLINT      NOT NULL DEFAULT 0,
-    created_at          TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
-    updated_at          TIMESTAMPTZ   NOT NULL DEFAULT NOW()
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    application_id          INTEGER REFERENCES applications(id) ON DELETE SET NULL,
+    hr_name                 TEXT    NOT NULL DEFAULT '',
+    hr_company              TEXT    NOT NULL DEFAULT '',
+    job_title               TEXT    NOT NULL DEFAULT '',
+    last_message_text       TEXT    NOT NULL DEFAULT '',
+    last_message_from       TEXT    NOT NULL DEFAULT 'hr',
+    last_message_at         TEXT,
+    unread_count            INTEGER NOT NULL DEFAULT 0,
+    status                  TEXT    NOT NULL DEFAULT 'active',
+    interest_level          TEXT    NOT NULL DEFAULT '',
+    hr_wechat               TEXT    NOT NULL DEFAULT '',
+    wechat_shared_at        TEXT,
+    resume_sent             INTEGER NOT NULL DEFAULT 0,
+    phone_shared            INTEGER NOT NULL DEFAULT 0,
+    transfer_requested      INTEGER NOT NULL DEFAULT 0,
+    transfer_requested_at   TEXT,
+    auto_reply_enabled      INTEGER NOT NULL DEFAULT 1,
+    has_unreplied           INTEGER NOT NULL DEFAULT 0,
+    created_at              TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at              TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
-CREATE INDEX IF NOT EXISTS idx_conv_status     ON conversations (status);
-CREATE INDEX IF NOT EXISTS idx_conv_hr_name    ON conversations (hr_name);
-CREATE INDEX IF NOT EXISTS idx_conv_unreplied  ON conversations (has_unreplied, status, auto_reply_enabled);
+CREATE INDEX IF NOT EXISTS idx_conv_status    ON conversations (status);
+CREATE INDEX IF NOT EXISTS idx_conv_hr_name   ON conversations (hr_name);
+CREATE INDEX IF NOT EXISTS idx_conv_unreplied ON conversations (has_unreplied, status, auto_reply_enabled);
 
 -- 3. 聊天消息
 CREATE TABLE IF NOT EXISTS messages (
-    id                SERIAL PRIMARY KEY,
-    conversation_id   INTEGER       NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
-    sender            VARCHAR(8)    NOT NULL DEFAULT 'hr',
-    content           TEXT          NOT NULL DEFAULT '',
-    delivery_status   VARCHAR(16)   NOT NULL DEFAULT '',
-    ai_generated      SMALLINT      NOT NULL DEFAULT 0,
-    created_at        TIMESTAMPTZ   NOT NULL DEFAULT NOW()
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    conversation_id   INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    sender            TEXT    NOT NULL DEFAULT 'hr',
+    content           TEXT    NOT NULL DEFAULT '',
+    delivery_status   TEXT    NOT NULL DEFAULT '',
+    ai_generated      INTEGER NOT NULL DEFAULT 0,
+    created_at        TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_msg_conv ON messages (conversation_id, created_at);
 
 -- 4. KV 设置
 CREATE TABLE IF NOT EXISTS settings (
-    key         VARCHAR(64)   PRIMARY KEY,
-    value       TEXT          NOT NULL DEFAULT '',
-    updated_at  TIMESTAMPTZ   NOT NULL DEFAULT NOW()
+    key         TEXT PRIMARY KEY,
+    value       TEXT NOT NULL DEFAULT '',
+    updated_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 -- 5. 每日统计
 CREATE TABLE IF NOT EXISTS daily_stats (
-    date                DATE PRIMARY KEY,
-    search_count        INTEGER NOT NULL DEFAULT 0,
-    apply_count         INTEGER NOT NULL DEFAULT 0,
-    reply_count         INTEGER NOT NULL DEFAULT 0,
+    date                  TEXT PRIMARY KEY,
+    search_count          INTEGER NOT NULL DEFAULT 0,
+    apply_count           INTEGER NOT NULL DEFAULT 0,
+    reply_count           INTEGER NOT NULL DEFAULT 0,
     wechat_exchange_count INTEGER NOT NULL DEFAULT 0,
-    interview_count     INTEGER NOT NULL DEFAULT 0,
-    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    interview_count       INTEGER NOT NULL DEFAULT 0,
+    created_at            TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 -- 6. 候选池
 CREATE TABLE IF NOT EXISTS shortlists (
-    id          SERIAL PRIMARY KEY,
-    job_url     TEXT          NOT NULL,
-    job_title   VARCHAR(256)  NOT NULL DEFAULT '',
-    company     VARCHAR(256)  NOT NULL DEFAULT '',
-    salary      VARCHAR(64)   NOT NULL DEFAULT '',
-    city        VARCHAR(64)   NOT NULL DEFAULT '',
-    note        TEXT          NOT NULL DEFAULT '',
-    created_at  TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
-    CONSTRAINT uq_shortlists_job_url UNIQUE (job_url)
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_url     TEXT NOT NULL,
+    job_title   TEXT NOT NULL DEFAULT '',
+    company     TEXT NOT NULL DEFAULT '',
+    salary      TEXT NOT NULL DEFAULT '',
+    city        TEXT NOT NULL DEFAULT '',
+    note        TEXT NOT NULL DEFAULT '',
+    created_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE UNIQUE INDEX IF NOT EXISTS uq_shortlists_job_url ON shortlists (job_url);
 
--- 7. 面试会话持久化
-CREATE TABLE IF NOT EXISTS interview_sessions (
-    session_id      VARCHAR(64)   PRIMARY KEY,
-    job_focus       VARCHAR(256)  NOT NULL DEFAULT '',
-    job_context     TEXT          NOT NULL DEFAULT '',
-    resume          TEXT          NOT NULL DEFAULT '',
-    round_count     INTEGER       NOT NULL DEFAULT 0,
-    max_rounds      INTEGER       NOT NULL DEFAULT 10,
-    history_json    JSONB         NOT NULL DEFAULT '[]',
-    last_question   TEXT          NOT NULL DEFAULT '',
-    last_category   VARCHAR(32)   NOT NULL DEFAULT '',
-    status          VARCHAR(16)   NOT NULL DEFAULT 'active',
-    created_at      TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
-    updated_at      TIMESTAMPTZ   NOT NULL DEFAULT NOW()
-);
-
--- 8. 线下面试地点追踪
+-- 7. 线下面试地点追踪
 CREATE TABLE IF NOT EXISTS offline_interview_locations (
-    id                SERIAL PRIMARY KEY,
-    conversation_id   INTEGER       NOT NULL,
-    hr_name           VARCHAR(64)   NOT NULL DEFAULT '',
-    hr_company        VARCHAR(256)  NOT NULL DEFAULT '',
-    job_title         VARCHAR(256)  NOT NULL DEFAULT '',
-    city              VARCHAR(64)   NOT NULL DEFAULT '',
-    location_detail   VARCHAR(256)  NOT NULL DEFAULT '',
-    hr_message        TEXT          NOT NULL DEFAULT '',
-    replied           SMALLINT      NOT NULL DEFAULT 0,
-    created_at        TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
-    updated_at        TIMESTAMPTZ   NOT NULL DEFAULT NOW()
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    conversation_id   INTEGER NOT NULL,
+    hr_name           TEXT NOT NULL DEFAULT '',
+    hr_company        TEXT NOT NULL DEFAULT '',
+    job_title         TEXT NOT NULL DEFAULT '',
+    city              TEXT NOT NULL DEFAULT '',
+    location_detail   TEXT NOT NULL DEFAULT '',
+    hr_message        TEXT NOT NULL DEFAULT '',
+    replied           INTEGER NOT NULL DEFAULT 0,
+    created_at        TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at        TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_offline_city ON offline_interview_locations (city);
 
--- 9. Token 用量统计
+-- 8. Token 用量统计
 CREATE TABLE IF NOT EXISTS token_usage (
-    id                SERIAL PRIMARY KEY,
-    model             VARCHAR(64)   NOT NULL DEFAULT '',
-    source            VARCHAR(32)   NOT NULL DEFAULT '',
-    prompt_tokens     INTEGER       NOT NULL DEFAULT 0,
-    completion_tokens INTEGER       NOT NULL DEFAULT 0,
-    total_tokens      INTEGER       NOT NULL DEFAULT 0,
-    elapsed_ms        DOUBLE PRECISION NOT NULL DEFAULT 0,
-    tokens_per_sec    DOUBLE PRECISION NOT NULL DEFAULT 0,
-    created_at        TIMESTAMPTZ   NOT NULL DEFAULT NOW()
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    model             TEXT NOT NULL DEFAULT '',
+    source            TEXT NOT NULL DEFAULT '',
+    prompt_tokens     INTEGER NOT NULL DEFAULT 0,
+    completion_tokens INTEGER NOT NULL DEFAULT 0,
+    total_tokens      INTEGER NOT NULL DEFAULT 0,
+    elapsed_ms        REAL NOT NULL DEFAULT 0,
+    tokens_per_sec    REAL NOT NULL DEFAULT 0,
+    created_at        TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
--- 10. 模拟面试记录
+-- 9. 模拟面试记录
 CREATE TABLE IF NOT EXISTS mock_interviews (
-    id                  SERIAL PRIMARY KEY,
-    position            VARCHAR(128) NOT NULL DEFAULT '',
-    topic               VARCHAR(256) NOT NULL DEFAULT '',
-    difficulty          VARCHAR(16)  NOT NULL DEFAULT 'medium',
-    rounds              INTEGER      NOT NULL DEFAULT 0,
-    qa_json             JSONB        NOT NULL DEFAULT '[]',
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    position            TEXT NOT NULL DEFAULT '',
+    topic               TEXT NOT NULL DEFAULT '',
+    difficulty          TEXT NOT NULL DEFAULT 'medium',
+    rounds              INTEGER NOT NULL DEFAULT 0,
+    qa_json             TEXT NOT NULL DEFAULT '[]',
     score               INTEGER,
     strengths           TEXT,
     weaknesses          TEXT,
     overall_evaluation  TEXT,
-    created_at          TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+    created_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 -- 初始默认设置

@@ -14,9 +14,7 @@ BOSS直聘 岗位采集工具
 
 import argparse
 import csv
-import io
 import json
-import os
 import random
 import re
 import sys
@@ -60,12 +58,16 @@ def _is_invalid_company(name: str) -> bool:
     return False
 
 
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus  # noqa: E402
 
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import sync_playwright  # noqa: E402
 
-# Windows 编码修复
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
+# Windows 编码修复：原地改编码。不要重新包一层 TextIOWrapper —— 旧包装对象被 GC 时
+# 会连带关掉底层流，导入方（uvicorn / pytest 的 stdout 捕获）会直接炸。
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
 
 # ── 配置 ──
 TODAY = date.today().isoformat()
@@ -589,11 +591,11 @@ def salary_ok(text):
     )
     if len(nums) < 2:
         return False
-    l, h = int(nums[0]), int(nums[1])
-    if l < 5 and h < 20:
-        l *= 10
-        h *= 10
-    return 15 <= l and h <= 35
+    low, high = int(nums[0]), int(nums[1])
+    if low < 5 and high < 20:
+        low *= 10
+        high *= 10
+    return 15 <= low and high <= 35
 
 
 def pause(a=1.0, b=3.0):
@@ -782,13 +784,12 @@ class BossScraper:
         pause(2, 4)
         self.page.bring_to_front()
         print("\n🔓 浏览器已打开，请扫码登录")
-        last = self.page.url
         logged_in = False
         for i in range(600):
             time.sleep(1)
             try:
                 url = self.page.evaluate("window.location.href")
-            except:
+            except Exception:
                 continue
             if (
                 any(p in url for p in ["/web/geek", "/web/geek/chat", "/job_detail"])
@@ -799,7 +800,6 @@ class BossScraper:
                 break
             if "security" in url or "passport" in url:
                 print("⚠️ 检测到安全验证页面，请在浏览器中完成验证")
-            last = url
             if i > 0 and i % 30 == 0:
                 print("  ⏳ %ds" % i)
         if not logged_in:
@@ -965,10 +965,10 @@ class BossScraper:
             self._save_state()
             return dom_jobs
 
-        lines = [l.strip() for l in self.page.inner_text("body").split("\n") if l.strip()]
+        lines = [s.strip() for s in self.page.inner_text("body").split("\n") if s.strip()]
 
         # 薪资行定位
-        sal_idx = [i for i, l in enumerate(lines) if re.search(r"\d+[-~]\d+K", decode_salary(l), re.I)]
+        sal_idx = [i for i, line in enumerate(lines) if re.search(r"\d+[-~]\d+K", decode_salary(line), re.I)]
 
         jobs = []
         for n, si in enumerate(sal_idx):
@@ -1017,7 +1017,7 @@ class BossScraper:
         # 合并链接
         links = self._extract_links()
         if links:
-            lm = {l["title"][:12]: l["href"] for l in links if l["title"][:12]}
+            lm = {link["title"][:12]: link["href"] for link in links if link["title"][:12]}
             for j in jobs:
                 if not j["url"] and j["title"][:12] in lm:
                     j["url"] = lm[j["title"][:12]]
@@ -1077,7 +1077,7 @@ class BossScraper:
                         if (infoBlock) company = clean(infoBlock.innerText);
                     }
                     // 脏数据过滤：company 不应包含经验/学历/薪资关键词（这些是其他字段）
-                    if (company && /经验|应届|在校|不限|学历|本科|硕士|博士|大专|中专|高中|元\\\/时|元\\\/月|\\\\d+[-~]\\\\d+K|\\\\d+-\\\\d+元|\\\\d+人以上|\\\\d+人/.test(company)) {
+                    if (company && /经验|应届|在校|不限|学历|本科|硕士|博士|大专|中专|高中|元\\\\/时|元\\\\/月|\\\\d+[-~]\\\\d+K|\\\\d+-\\\\d+元|\\\\d+人以上|\\\\d+人/.test(company)) {
                         company = '';
                     }
                     // 兜底：长度过短或纯数字也当作脏数据
@@ -1087,7 +1087,7 @@ class BossScraper:
                     // companyId: 从公司名链接的 href 里取 /gongsi/<id>.html
                     let companyId = '';
                     const brandHref = card.querySelector('a[href*="/gongsi/"]')?.getAttribute('href') || '';
-                    const m = brandHref.match(/\/gongsi\/(?:job\/)?([0-9a-zA-Z]+~?)/);
+                    const m = brandHref.match(/\\/gongsi\\/(?:job\\/)?([0-9a-zA-Z]+~?)/);
                     if (m) companyId = m[1];
                     let city = pickText(card, ['.job-area', '[class*="job-area"]'])
                         || lines.find(x => x.includes('·') && x.length < 40) || '';
@@ -1277,23 +1277,6 @@ class BossScraper:
         调用方回退到 DOM 抓取。
         """
         try:
-            headers = self._extract_zp_headers()
-            zp_token = headers.get("zp_token") or ""
-            token = headers.get("token") or ""
-
-            detail_headers = {
-                "zp_token": zp_token,
-                "token": token,
-                "X-Requested-With": "XMLHttpRequest",
-                "Content-Type": "application/x-www-form-urlencoded",
-                "Accept": "application/json, text/plain, */*",
-                "Origin": "https://www.zhipin.com",
-                "Referer": self.page.url,
-                "User-Agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-                ),
-            }
 
             all_jobs: list = []
             for page_num in range(1, max_pages + 1):
@@ -1463,7 +1446,7 @@ class BossScraper:
             # 滚回顶部，确保 DOM 完整渲染
             self.page.evaluate("window.scrollTo(0,0)")
             time.sleep(random.uniform(0.3, 0.5))
-        except:
+        except Exception:
             pass
 
     def _extract_links(self):
@@ -1475,7 +1458,7 @@ class BossScraper:
                     if(h&&t&&!s.has(h)&&t.length<60){s.add(h);r.push({href:h,title:t.substring(0,60)});}
                 });return r;
             }""")
-        except:
+        except Exception:
             return []
 
     # ── 详情页 ──
@@ -1525,22 +1508,22 @@ class BossScraper:
                 }""")
                 result["hr_name"] = (hr_info.get("hrName") or "").strip()
                 result["hr_title"] = (hr_info.get("hrTitle") or "").strip()
-            except:
+            except Exception:
                 pass
 
             # ── 提取岗位描述 ──
             body = self.page.inner_text("body")
-            lines = [l.strip() for l in body.split("\n") if l.strip()]
+            lines = [s.strip() for s in body.split("\n") if s.strip()]
 
             skill_lines = []
             capture = False
-            for l in lines:
-                if "职位描述" in l or "岗位职责" in l:
+            for line in lines:
+                if "职位描述" in line or "岗位职责" in line:
                     capture = True
                     continue
                 if capture:
                     if any(
-                        stop in l
+                        stop in line
                         for stop in [
                             "公司介绍",
                             "工商信息",
@@ -1549,16 +1532,16 @@ class BossScraper:
                         ]
                     ):
                         break
-                    skill_lines.append(l)
+                    skill_lines.append(line)
             result["description"] = "\n".join(skill_lines) if skill_lines else ""
 
             # 如果 JS 没抓到招聘者信息，从文本中尝试解析
             if not result["hr_name"]:
-                for i, l in enumerate(lines):
-                    if l in ("HR", "招聘者", "招聘经理", "HRBP", "人事", "猎头"):
+                for i, line in enumerate(lines):
+                    if line in ("HR", "招聘者", "招聘经理", "HRBP", "人事", "猎头"):
                         if i > 0 and len(lines[i - 1]) <= 6:
                             result["hr_name"] = lines[i - 1]
-                            result["hr_title"] = l
+                            result["hr_title"] = line
                             break
 
         except Exception:

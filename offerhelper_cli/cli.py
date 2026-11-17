@@ -3,6 +3,7 @@
 import json
 import os
 import sys
+
 import click
 
 from . import client, output
@@ -198,20 +199,31 @@ def shortlist_cmd(action, job_url, title, company, sid):
 
 
 # ── 服务管理 ──
+def _project_dir() -> str:
+    """项目根目录（含 boss/app.py 的那层），支持 OFFERHELPER_PROJECT 覆盖。"""
+    default_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if os.path.exists(os.path.join(default_dir, "boss", "app.py")):
+        return default_dir
+    return os.environ.get("OFFERHELPER_PROJECT", default_dir)
+
+
 @main.command("server")
 @click.option("--start", is_flag=True, help="启动后台服务")
-@click.option("--stop", is_flag=True, help="停止后台服务（精确杀 boss_app 进程，不动其他 python）")
+@click.option("--stop", is_flag=True, help="停止后台服务（精确杀 boss 服务进程，不动其他 python）")
 @click.option("--port", type=int, default=8010, help="服务端口")
 def server_cmd(start, stop, port):
-    import subprocess, os
+    import subprocess
 
-    project_dir = os.path.dirname(os.path.dirname(__file__))
-    if not os.path.exists(os.path.join(project_dir, "boss", "app.py")):
-        project_dir = os.environ.get("OFFERHELPER_PROJECT", os.path.dirname(os.path.dirname(__file__)))
+    project_dir = _project_dir()
 
     if start:
-        cmd = ["python", os.path.join(project_dir, "boss_app.py"), "--port", str(port)]
-        subprocess.Popen(cmd, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000), cwd=project_dir)
+        # 必须用 -m boss.app：boss 是包，app.py 里全是相对导入，直接跑文件会 ImportError
+        cmd = [sys.executable, "-m", "boss.app", "--port", str(port)]
+        subprocess.Popen(
+            cmd,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000),
+            cwd=project_dir,
+        )
         output.emit(output.ok("server", data={"status": "started", "url": f"http://127.0.0.1:{port}"}))
     elif stop:
         killed = _kill_boss_app()
@@ -227,16 +239,14 @@ def server_cmd(start, stop, port):
 @main.command("restart")
 @click.option("--port", type=int, default=8010, help="端口号")
 def restart_cmd(port):
-    """杀旧进程 + 起新服务。Windows 用 wmic 精确杀，不动其他 python。"""
-    import subprocess, os, time, urllib.request
+    """杀旧进程 + 起新服务（只匹配 boss 服务进程，不动其他 python）。"""
+    import subprocess
+    import time
+    import urllib.request
 
-    project_dir = os.path.dirname(os.path.dirname(__file__))
+    project_dir = _project_dir()
     if not os.path.exists(os.path.join(project_dir, "boss", "app.py")):
-        project_dir = os.environ.get("OFFERHELPER_PROJECT", os.path.dirname(os.path.dirname(__file__)))
-
-    boss_py = os.path.join(project_dir, "boss", "app.py")
-    if not os.path.exists(boss_py):
-        output.emit(output.fail("restart", f"找不到 boss_app.py"))
+        output.emit(output.fail("restart", "找不到 boss/app.py，请在项目根目录或设置 OFFERHELPER_PROJECT"))
         return
 
     killed = _kill_boss_app()
@@ -248,7 +258,7 @@ def restart_cmd(port):
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
     with open(log_path, "w", encoding="utf-8") as lf:
         subprocess.Popen(
-            [sys.executable, boss_py, "--port", str(port)],
+            [sys.executable, "-m", "boss.app", "--port", str(port)],
             stdout=lf,
             stderr=subprocess.STDOUT,
             cwd=project_dir,
@@ -263,59 +273,79 @@ def restart_cmd(port):
         output.emit(output.ok("restart", data={"port": port, "url": f"http://127.0.0.1:{port}", "note": "稍等再试"}))
 
 
-def _kill_boss_app():
-    """精确杀死所有 boss_app.py 主进程（python 解释器执行 boss_app.py 的）。
-    只匹配 cmdline 中包含 'boss_app.py' 的 python 进程，避免误杀任何包含 'boss_app' 字样的 shell。
-    返回杀死数。
-    """
-    killed = 0
+_BOSS_CMDLINE_MARKERS = ("boss_app.py", "boss/app.py", "-m boss.app", "boss.app --port")
+
+
+def _is_boss_cmdline(args) -> bool:
+    """判断一条命令行是不是主服务进程（兼容旧路径 boss_app.py 和新的 boss/app.py）。"""
+    joined = " ".join(str(a or "") for a in args).replace("\\", "/")
+    return any(marker in joined for marker in _BOSS_CMDLINE_MARKERS)
+
+
+def _find_boss_pids() -> list:
+    """找出主服务进程 PID：优先 psutil，没有就用 PowerShell CIM（wmic 在新版 Windows 已移除）。"""
+    my_pid = os.getpid()
+    pids = []
     try:
         import psutil  # type: ignore
     except Exception:
         psutil = None
 
     if psutil is not None:
-        my_pid = os.getpid()
         for p in psutil.process_iter(["pid", "name", "cmdline"]):
             try:
                 pid = p.info.get("pid")
                 if pid == my_pid:
                     continue
-                cmd = p.info.get("cmdline") or []
-                if not isinstance(cmd, list):
-                    continue
                 name = (p.info.get("name") or "").lower()
-                if "python" not in name and not any("python" in (a or "").lower() for a in cmd[:1]):
+                if "python" not in name:
                     continue
-                if not any("boss_app.py" in (a or "") for a in cmd):
-                    continue
-                p.kill()
-                killed += 1
+                if _is_boss_cmdline(p.info.get("cmdline") or []):
+                    pids.append(pid)
             except Exception:
                 continue
-        return killed
+        return pids
 
-    # 兜底：用 wmic（旧 Windows 系统），但限定 commandline 必须含 boss_app.py
+    if os.name != "nt":
+        return pids
+
     import subprocess
 
+    script = (
+        "Get-CimInstance Win32_Process -Filter \"Name like 'python%'\" | "
+        "Where-Object { $_.CommandLine -match 'boss_app\\.py|boss[/\\\\]app\\.py|-m boss\\.app' } | "
+        "ForEach-Object { $_.ProcessId }"
+    )
     try:
         r = subprocess.run(
-            "wmic process where \"name='python.exe' and commandline like '%%boss_app.py%%'\" get processid",
+            ["powershell", "-NoProfile", "-Command", script],
             capture_output=True,
-            shell=True,
             text=True,
-            timeout=10,
+            timeout=20,
         )
-        for line in r.stdout.split("\n"):
+        for line in r.stdout.splitlines():
             line = line.strip()
-            if line.isdigit() and int(line) != os.getpid():
-                try:
-                    subprocess.run(f"taskkill /F /PID {line}", capture_output=True, shell=True, timeout=5)
-                    killed += 1
-                except Exception:
-                    pass
+            if line.isdigit() and int(line) != my_pid:
+                pids.append(int(line))
     except Exception:
         pass
+    return pids
+
+
+def _kill_boss_app():
+    """精确杀死主服务进程，不动其他 python 进程。返回杀死数。"""
+    import subprocess
+
+    killed = 0
+    for pid in _find_boss_pids():
+        try:
+            if os.name == "nt":
+                subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True, timeout=10)
+            else:
+                os.kill(pid, 9)
+            killed += 1
+        except Exception:
+            continue
     return killed
 
 

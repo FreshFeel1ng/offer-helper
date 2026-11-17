@@ -3,8 +3,8 @@
 
 自动识别面试官问题的类型，以便 Agent 采用不同的回答策略
 """
-from enum import Enum
 from dataclasses import dataclass, field
+from enum import Enum
 
 
 class QuestionCategory(str, Enum):

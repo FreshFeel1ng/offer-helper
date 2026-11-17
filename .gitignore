@@ -21,6 +21,9 @@ boss_page.html
 search_result.json
 NUL
 
+# 面试模块运行时数据：简历原件 / 解析结果 / 块向量缓存（含手机号邮箱等个人信息，绝不提交）
+interview/data/
+
 # Secrets — never commit
 *.pem
 *.key

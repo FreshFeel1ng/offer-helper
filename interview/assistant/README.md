@@ -4,10 +4,10 @@
 
 ## 功能概述
 
-- **实时面试回答生成**: 监听面试官提问 → 问题分类 → RAG检索简历 → AI流式生成回答
-- **简历解析与RAG**: 支持 PDF/DOCX/TXT 解析，LLM提取结构化信息，关键词/向量双模式检索
-- **语音识别**: 支持前端语音识别结果处理 或 服务端系统音频捕获+Whisper
-- **回答人性化**: 书面语→口语转换，添加自然填充词
+- **实时面试回答生成**: 监听面试官提问 → 问题分类 → 检索简历 → AI流式生成回答
+- **简历解析与检索**: 支持 PDF/DOCX/TXT 解析，LLM提取结构化信息，关键词/向量双模式检索
+- **语音识别**: 支持前端语音识别结果处理 或 服务端系统音频捕获+Whisper（可选）
+- **模拟面试**: 自动出题 + 逐轮评分 + 标准答案 + 综合报告
 
 ## 模块结构
 
@@ -15,16 +15,21 @@
 assistant/
 ├── __init__.py       # 包初始化
 ├── config.py         # 配置管理（兼容 boss_state SQLite）
-├── agent.py          # 核心 AI Agent（LangChain + LLM 流式生成）
+├── llm_client.py     # LLM 客户端（OpenAI 兼容协议，httpx 直连）
+├── agent.py          # 核心 AI Agent（流式回答生成）
 ├── classifier.py     # 面试问题分类器（9种类型）
 ├── speech.py         # 语音文本预处理与问题检测
-├── humanizer.py      # 回答人性化后处理
-├── resume.py         # 简历解析 + RAG知识库
-├── audio_capture.py  # 系统音频捕获 + Whisper转录
-├── vector_rag.py     # BGE-M3 + Milvus 向量检索
+├── resume.py         # 简历解析 + 知识库（关键词 / 内存向量检索）
+├── audio_capture.py  # 系统音频捕获 + Whisper转录（可选依赖）
+├── mock.py           # 模拟面试会话逻辑
+├── mock_routes.py    # 模拟面试 WebSocket 路由
 ├── routes.py         # FastAPI 路由 + WebSocket 端点
 └── README.md         # 本文件
 ```
+
+技术选型：**不依赖 LangChain / Milvus 等框架**，LLM 与 embedding 直接走 OpenAI 兼容 HTTP 接口，
+向量检索用 numpy 在内存里做余弦相似度（块向量缓存在 `data/resumes/<session>/_embeddings/`），
+因此部署只需要 Python + 该服务所需依赖，不需要 Docker / 向量数据库。
 
 ## API 端点
 
@@ -69,4 +74,17 @@ assistant/
 
 LLM 配置自动从 offer-helper 的 `boss_state` SQLite settings 表读取，回退到环境变量。
 
-向量检索需要 Milvus (localhost:19530) 和硅基流动 BGE-M3 API。
+| 配置项 | 用途 |
+|--------|------|
+| `ai_api_key` / `ai_base_url` / `ai_model` | 回答生成、简历信息提取、模拟面试出题与评分 |
+| `siliconflow_api_key` / `embedding_model` | 向量检索（BGE-M3，仅在"向量"模式下需要） |
+| `mineru_api_token` | PDF 精准解析（可选，失败自动回退本地解析） |
+
+## 运行
+
+```bash
+pip install -r interview/requirements.txt
+cd interview && python -m uvicorn main:app --port 8001
+```
+
+系统音频捕获另需 `pip install sounddevice openai`（可选，不装只能文字问答）。

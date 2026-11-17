@@ -1,7 +1,7 @@
 """
 面试助手配置 - 兼容 offer-helper 的 LLM 配置体系
 
-优先从 boss_state (PostgreSQL settings表) 读取配置,
+优先从 boss_state (SQLite settings 表) 读取配置,
 回退到环境变量。
 """
 import os
@@ -33,9 +33,7 @@ class AssistantConfig:
         self.siliconflow_api_key: str = os.getenv("SILICONFLOW_API_KEY", "")
         self.siliconflow_base_url: str = os.getenv("SILICONFLOW_BASE_URL", "https://api.siliconflow.cn/v1")
 
-        # Milvus
-        self.milvus_host: str = os.getenv("MILVUS_HOST", "localhost")
-        self.milvus_port: int = int(os.getenv("MILVUS_PORT", "19530"))
+        # 嵌入模型（向量检索用；仅需 API，不需要本地向量库）
         self.embedding_model: str = os.getenv("EMBEDDING_MODEL", "BAAI/bge-m3")
 
         # 从 offer-helper 的 boss_state 加载 AI 配置
@@ -44,7 +42,7 @@ class AssistantConfig:
     def _load_from_boss_state(self):
         """从 boss_state SQLite 读取配置"""
         try:
-            from boss.state import get_setting, get_db
+            from boss.state import get_db, get_setting
             get_db()
 
             key = get_setting("ai_api_key")

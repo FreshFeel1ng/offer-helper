@@ -2,7 +2,6 @@
 
 import json
 import sys
-from typing import Optional
 
 # Windows 默认 GBK 控制台无法编码 BOSS 返回里的部分罕见 Unicode（如 \u2f24 等 CJK 部首字符）。
 # 强制把 stdout/stderr 切换到 UTF-8 + 错误回退到 backslashreplace，避免 UnicodeEncodeError 中断 JSON 输出。

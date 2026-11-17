@@ -3,24 +3,23 @@
 
 集成到 offer-helper 的 interview 服务中，提供:
 - 实时面试辅助（语音识别 → 问题检测 → AI回答生成）
-- 简历上传与RAG检索
-- 系统音频捕获
+- 简历上传与检索（关键词 / 语义向量）
+- 系统音频捕获（可选）
 """
 import asyncio
-import json
 import uuid
 from typing import Optional
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, File, UploadFile, Form, HTTPException
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 
 from . import mock_routes
-
-from .config import config
 from .agent import InterviewAgent
-from .speech import preprocess_transcript, is_complete_question, extract_question
-from .audio_capture import SystemAudioCapture, WhisperTranscriber
 from .resume import ResumeKnowledgeBase
+from .speech import extract_question, is_complete_question, preprocess_transcript
+
+# 系统音频捕获依赖 sounddevice / openai，属于可选能力：按需导入，
+# 没装也不影响服务启动和文字问答。
 
 
 class SessionConfig(BaseModel):
@@ -39,15 +38,15 @@ class AssistantSessionManager:
         self.sessions: dict[str, dict] = {}
         self.active_ws: dict = {}
 
-    def create_session(self, cfg: Optional[SessionConfig] = None) -> dict:
-        """创建新会话"""
-        # 关闭所有旧连接
-        old_ws_list = list(self.active_ws.keys())
-        for old_ws in old_ws_list:
+    async def create_session(self, cfg: Optional[SessionConfig] = None) -> dict:
+        """创建新会话（会关掉旧连接，保证同时只有一个活跃会话）"""
+        # 关闭所有旧连接（WebSocket.close 是协程，必须 await）
+        for old_ws in list(self.active_ws.keys()):
             try:
-                old_ws.close()
+                await old_ws.close()
             except Exception:
                 pass
+            self.active_ws.pop(old_ws, None)
 
         # 清理所有旧 session
         old_ids = list(self.sessions.keys())
@@ -100,7 +99,7 @@ def register_assistant_routes(app: FastAPI):
 
     @app.post("/api/assistant/sessions")
     async def create_assistant_session(cfg: Optional[SessionConfig] = None):
-        session = assistant_manager.create_session(cfg)
+        session = await assistant_manager.create_session(cfg)
         return {"sessionId": session["id"], "config": session["config"].model_dump()}
 
     @app.post("/api/assistant/resume/upload")
@@ -183,7 +182,7 @@ def register_assistant_routes(app: FastAPI):
     async def assistant_websocket(ws: WebSocket):
         await ws.accept()
 
-        session = assistant_manager.create_session()
+        session = await assistant_manager.create_session()
         assistant_manager.active_ws[ws] = session["id"]
 
         # 发送会话信息
@@ -233,8 +232,15 @@ def register_assistant_routes(app: FastAPI):
                     await _handle_stop_audio_capture(session)
 
                 elif msg_type == "list_audio_devices":
-                    cap = SystemAudioCapture()
-                    cap.list_devices()
+                    try:
+                        from .audio_capture import SystemAudioCapture
+
+                        SystemAudioCapture().list_devices()
+                    except Exception as e:
+                        await ws.send_json({
+                            "type": "error",
+                            "payload": {"message": f"音频设备不可用: {e}"},
+                        })
 
                 elif msg_type == "direct_question":
                     # 直接文本问题（不通过语音识别）
@@ -309,7 +315,7 @@ async def _generate_and_send_answer(ws: WebSocket, session: dict, question: str)
             },
         })
 
-        print(f"[Agent] 回答完成")
+        print("[Agent] 回答完成")
 
     except Exception as e:
         print(f"[Agent] 生成回答失败: {e}")
@@ -327,6 +333,16 @@ async def _generate_and_send_answer(ws: WebSocket, session: dict, question: str)
 
 async def _handle_start_audio_capture(ws: WebSocket, session: dict):
     """启动系统音频捕获 + Whisper 识别"""
+    try:
+        from .audio_capture import SystemAudioCapture, WhisperTranscriber
+    except Exception as e:
+        print(f"[Audio] 音频依赖未安装: {e}")
+        await ws.send_json({
+            "type": "error",
+            "payload": {"message": f"系统音频捕获不可用（需安装 sounddevice / openai）: {e}"},
+        })
+        return
+
     cap = SystemAudioCapture()
     transcriber = WhisperTranscriber()
 

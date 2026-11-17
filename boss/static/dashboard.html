@@ -269,10 +269,8 @@
         <div class="setting-row" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);"><label>MinerU API Token</label><input type="password" id="setMineruToken" placeholder="https://mineru.net 申请 Token，用于精准 PDF 简历解析" style="flex:1;"><button type="button" class="btn btn-sm" onclick="var el=document.getElementById('setMineruToken');el.type=el.type==='password'?'text':'password';" style="font-size:11px;">👁</button></div>
         <div style="font-size:11px;color:var(--text-3);margin-top:2px;">可选。填写后 PDF 简历使用 MinerU 高精度解析，不填则用本地 PyMuPDF 解析。</div>
         <div class="setting-row" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);"><label>硅基流动 API Key</label><input type="text" id="setSiliconflowKey" placeholder="用于 BGE-M3 向量嵌入，可选" style="flex:1;"></div>
-        <div style="font-size:11px;color:var(--text-3);margin-top:2px;">可选。填写后启用向量 RAG 检索（需要 Milvus localhost:19530），简历匹配更精准。</div>
+        <div style="font-size:11px;color:var(--text-3);margin-top:2px;">可选。填写后启用 BGE-M3 向量检索（历史 JD 相似度 / 简历语义匹配），不填则跳过向量检索，不影响主流程。</div>
         <div class="setting-row" style="margin-top:10px;"><label>嵌入模型</label><select id="setEmbeddingModel" style="flex:1;padding:8px;background:var(--bg-card);border:1px solid var(--border);color:var(--text);border-radius:6px;font-size:13px;"><option value="" style="background:#1a1a2e;color:#fafafa;">BAAI/bge-m3 (默认)</option><option value="Pro/BAAI/bge-m3" style="background:#1a1a2e;color:#fafafa;">Pro/BAAI/bge-m3</option><option value="BAAI/bge-large-zh-v1.5" style="background:#1a1a2e;color:#fafafa;">BAAI/bge-large-zh-v1.5</option><option value="netease-youdao/bce-embedding-base_v1" style="background:#1a1a2e;color:#fafafa;">bce-embedding-base</option></select></div>
-        <div class="setting-row" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);"><label>使用本地模型</label><select id="setUseLocalModel"><option value="false">关闭（使用平台模型）</option><option value="true">开启（使用 Ollama 本地模型）</option></select></div>
-        <div style="font-size:11px;color:var(--text-3);margin-top:2px;">开启后将跳过云端 API，直接使用本地 Ollama 模型进行面试。适用于无网络或想节省 API 费用的场景。本地模型知识面窄，会启用 RAG 知识库增强。</div>
       </div>
 
       <div class="section"><h3>个人资料</h3>

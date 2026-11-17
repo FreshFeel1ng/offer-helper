@@ -2,6 +2,7 @@
 
 import os
 from typing import Optional
+
 import httpx
 
 BASE_URL = os.environ.get("OFFERHELPER_API", "http://127.0.0.1:8010")

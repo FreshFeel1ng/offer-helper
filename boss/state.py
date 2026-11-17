@@ -1,25 +1,26 @@
 #!/usr/bin/env python3
-"""
-PostgreSQL 数据层 —— 投递记录、聊天消息、设置、每日统计。
+"""SQLite 数据层 —— 投递记录、聊天消息、设置、每日统计。
+
+数据文件默认 `.boss_profile/boss_state.db`，可用环境变量 `BOSS_DB_PATH` 覆盖。
+建表在 `init_db()` 里完成（模块导入时自动执行），无需手动跑 schema.sql。
+连接按线程隔离，行对象是 `sqlite3.Row`（支持 `row["col"]` 和 `dict(row)`）。
 """
 
 import os
 import re
+import sqlite3
 import threading
-from datetime import date, datetime
+from datetime import date
 from pathlib import Path
-from typing import Optional, List, Dict, Any
-
-import psycopg2
-import psycopg2.extras
-import psycopg2.errors
+from typing import List, Optional
 
 # 尝试加载 .env 文件（项目根目录）
 try:
     from dotenv import load_dotenv
+
     for _env_path in [
-        Path(__file__).parent.parent / ".env",      # boss/state.py → 项目根目录
-        Path(__file__).parent / ".env",              # boss/state.py 同目录
+        Path(__file__).parent.parent / ".env",  # boss/state.py → 项目根目录
+        Path(__file__).parent / ".env",  # boss/state.py 同目录
     ]:
         if _env_path.exists():
             load_dotenv(_env_path)
@@ -28,50 +29,238 @@ except ImportError:
     pass
 
 
-def _get_db_config() -> dict:
-    """从环境变量读取 PostgreSQL 连接配置"""
-    return {
-        "host": os.getenv("PG_HOST", "localhost"),
-        "port": int(os.getenv("PG_PORT", "5432")),
-        "user": os.getenv("PG_USER", "root"),
-        "password": os.getenv("PG_PASSWORD", ""),
-        "dbname": os.getenv("PG_DATABASE", "postgres"),
-    }
+_DEFAULT_DB_PATH = Path(__file__).resolve().parent.parent / ".boss_profile" / "boss_state.db"
+
+
+def get_db_path() -> str:
+    """返回数据库文件路径（环境变量 BOSS_DB_PATH 优先）。"""
+    env_path = (os.getenv("BOSS_DB_PATH") or "").strip()
+    path = Path(env_path) if env_path else _DEFAULT_DB_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return str(path)
+
 
 _local = threading.local()
 
 
-def get_db() -> psycopg2.extensions.connection:
-    """获取当前线程的 PostgreSQL 连接（自动使用 RealDictCursor，兼容原 sqlite3.Row 的字典访问）"""
-    if not hasattr(_local, "conn") or _local.conn is None or _local.conn.closed:
-        cfg = _get_db_config()
-        _local.conn = psycopg2.connect(**cfg, cursor_factory=psycopg2.extras.RealDictCursor)
-        _local.conn.autocommit = False
-    return _local.conn
+def get_db() -> sqlite3.Connection:
+    """获取当前线程的 SQLite 连接（行对象为 sqlite3.Row）。"""
+    conn = getattr(_local, "conn", None)
+    if conn is None:
+        conn = sqlite3.connect(get_db_path(), timeout=15.0, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA busy_timeout=15000")
+        _local.conn = conn
+    return conn
+
+
+# ── 建表语句 ──
+# 全部使用 SQLite 类型：TEXT 存时间戳（CURRENT_TIMESTAMP，UTC），TEXT 存 JSON。
+_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS applications (
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_title               TEXT    NOT NULL DEFAULT '',
+    company                 TEXT    NOT NULL DEFAULT '',
+    company_id              TEXT    NOT NULL DEFAULT '',
+    salary                  TEXT    NOT NULL DEFAULT '',
+    job_url                 TEXT    NOT NULL DEFAULT '',
+    city                    TEXT    NOT NULL DEFAULT '',
+    experience              TEXT    NOT NULL DEFAULT '',
+    education               TEXT    NOT NULL DEFAULT '',
+    hr_name                 TEXT    NOT NULL DEFAULT '',
+    hr_title                TEXT    NOT NULL DEFAULT '',
+    hr_active               TEXT    NOT NULL DEFAULT '',
+    description             TEXT    NOT NULL DEFAULT '',
+    legal_rep               TEXT    NOT NULL DEFAULT '',
+    is_boss                 INTEGER NOT NULL DEFAULT 0,
+    area_district           TEXT    NOT NULL DEFAULT '',
+    business_district       TEXT    NOT NULL DEFAULT '',
+    company_size            TEXT    NOT NULL DEFAULT '',
+    industry                TEXT    NOT NULL DEFAULT '',
+    status                  TEXT    NOT NULL DEFAULT 'pending',
+    greeting_text           TEXT    NOT NULL DEFAULT '',
+    greeting_sent_at        TEXT,
+    embedding               TEXT,
+    optimize_result         TEXT    NOT NULL DEFAULT '',
+    optimize_at             TEXT,
+    chat_suggestion_result  TEXT    NOT NULL DEFAULT '',
+    chat_suggestion_at      TEXT,
+    created_at              TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at              TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS conversations (
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    application_id          INTEGER REFERENCES applications(id) ON DELETE SET NULL,
+    hr_name                 TEXT    NOT NULL DEFAULT '',
+    hr_company              TEXT    NOT NULL DEFAULT '',
+    job_title               TEXT    NOT NULL DEFAULT '',
+    last_message_text       TEXT    NOT NULL DEFAULT '',
+    last_message_from       TEXT    NOT NULL DEFAULT 'hr',
+    last_message_at         TEXT,
+    unread_count            INTEGER NOT NULL DEFAULT 0,
+    status                  TEXT    NOT NULL DEFAULT 'active',
+    interest_level          TEXT    NOT NULL DEFAULT '',
+    hr_wechat               TEXT    NOT NULL DEFAULT '',
+    wechat_shared_at        TEXT,
+    resume_sent             INTEGER NOT NULL DEFAULT 0,
+    phone_shared            INTEGER NOT NULL DEFAULT 0,
+    transfer_requested      INTEGER NOT NULL DEFAULT 0,
+    transfer_requested_at   TEXT,
+    auto_reply_enabled      INTEGER NOT NULL DEFAULT 1,
+    has_unreplied           INTEGER NOT NULL DEFAULT 0,
+    created_at              TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at              TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS messages (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    conversation_id   INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    sender            TEXT    NOT NULL DEFAULT 'hr',
+    content           TEXT    NOT NULL DEFAULT '',
+    delivery_status   TEXT    NOT NULL DEFAULT '',
+    ai_generated      INTEGER NOT NULL DEFAULT 0,
+    created_at        TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS settings (
+    key         TEXT PRIMARY KEY,
+    value       TEXT NOT NULL DEFAULT '',
+    updated_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS daily_stats (
+    date                  TEXT PRIMARY KEY,
+    search_count          INTEGER NOT NULL DEFAULT 0,
+    apply_count           INTEGER NOT NULL DEFAULT 0,
+    reply_count           INTEGER NOT NULL DEFAULT 0,
+    wechat_exchange_count INTEGER NOT NULL DEFAULT 0,
+    interview_count       INTEGER NOT NULL DEFAULT 0,
+    created_at            TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS shortlists (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_url     TEXT NOT NULL,
+    job_title   TEXT NOT NULL DEFAULT '',
+    company     TEXT NOT NULL DEFAULT '',
+    salary      TEXT NOT NULL DEFAULT '',
+    city        TEXT NOT NULL DEFAULT '',
+    note        TEXT NOT NULL DEFAULT '',
+    created_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS offline_interview_locations (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    conversation_id   INTEGER NOT NULL,
+    hr_name           TEXT NOT NULL DEFAULT '',
+    hr_company        TEXT NOT NULL DEFAULT '',
+    job_title         TEXT NOT NULL DEFAULT '',
+    city              TEXT NOT NULL DEFAULT '',
+    location_detail   TEXT NOT NULL DEFAULT '',
+    hr_message        TEXT NOT NULL DEFAULT '',
+    replied           INTEGER NOT NULL DEFAULT 0,
+    created_at        TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at        TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS token_usage (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    model             TEXT NOT NULL DEFAULT '',
+    source            TEXT NOT NULL DEFAULT '',
+    prompt_tokens     INTEGER NOT NULL DEFAULT 0,
+    completion_tokens INTEGER NOT NULL DEFAULT 0,
+    total_tokens      INTEGER NOT NULL DEFAULT 0,
+    elapsed_ms        REAL NOT NULL DEFAULT 0,
+    tokens_per_sec    REAL NOT NULL DEFAULT 0,
+    created_at        TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS mock_interviews (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    position            TEXT NOT NULL DEFAULT '',
+    topic               TEXT NOT NULL DEFAULT '',
+    difficulty          TEXT NOT NULL DEFAULT 'medium',
+    rounds              INTEGER NOT NULL DEFAULT 0,
+    qa_json             TEXT NOT NULL DEFAULT '[]',
+    score               INTEGER,
+    strengths           TEXT,
+    weaknesses          TEXT,
+    overall_evaluation  TEXT,
+    created_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
+# 索引单独执行：老库可能缺列，必须先补列再建索引
+_INDEX_SQL = """
+CREATE UNIQUE INDEX IF NOT EXISTS uq_applications_job_url
+    ON applications (job_url) WHERE job_url != '';
+CREATE INDEX IF NOT EXISTS idx_apps_status     ON applications (status);
+CREATE INDEX IF NOT EXISTS idx_apps_company    ON applications (company);
+CREATE INDEX IF NOT EXISTS idx_apps_company_id ON applications (company_id);
+CREATE INDEX IF NOT EXISTS idx_conv_status     ON conversations (status);
+CREATE INDEX IF NOT EXISTS idx_conv_hr_name    ON conversations (hr_name);
+CREATE INDEX IF NOT EXISTS idx_conv_unreplied  ON conversations (has_unreplied, status, auto_reply_enabled);
+CREATE INDEX IF NOT EXISTS idx_msg_conv        ON messages (conversation_id, created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_shortlists_job_url ON shortlists (job_url);
+CREATE INDEX IF NOT EXISTS idx_offline_city    ON offline_interview_locations (city);
+"""
+
+# 老库升级用：根据 _SCHEMA_SQL 推导出每张表的完整列定义，缺列时自动 ALTER TABLE 补上。
+# 注意：必须先补列再建索引（老库可能缺 status / has_unreplied 等被索引的列）。
+
+
+def _schema_columns() -> dict:
+    """从建表语句反推 {表名: {列名: DDL类型}}，用来给老库补列。"""
+    mem = sqlite3.connect(":memory:")
+    try:
+        mem.executescript(_SCHEMA_SQL)
+        tables = [
+            r[0]
+            for r in mem.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+            )
+        ]
+        result = {}
+        for table in tables:
+            columns = {}
+            for row in mem.execute(f"PRAGMA table_info({table})"):
+                name, col_type, notnull, default, pk = row[1], row[2], row[3], row[4], row[5]
+                if pk:
+                    continue  # 主键列不可能缺失，也不允许补
+                ddl = col_type or "TEXT"
+                if notnull and default is not None:
+                    ddl += f" NOT NULL DEFAULT {default}"
+                elif notnull:
+                    # 无默认值的 NOT NULL 列无法安全补到已有数据的表上，降级为可空
+                    pass
+                columns[name] = ddl
+            result[table] = columns
+        return result
+    finally:
+        mem.close()
+
+
+def _migrate_columns(conn: sqlite3.Connection):
+    """为老版本数据库补齐后加的列。"""
+    for table, columns in _schema_columns().items():
+        existing = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+        if not existing:
+            continue  # 表不存在（已被建表语句创建）
+        for column, ddl in columns.items():
+            if column not in existing:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+                print(f"[DB] 已为老库补列: {table}.{column}")
 
 
 def init_db():
-    """初始化数据库：建表 + 插入默认设置"""
+    """初始化数据库：建表 + 补列 + 建索引 + 插入默认设置。幂等。"""
     db = get_db()
-    cur = db.cursor()
-
-    # 确保模拟面试表存在
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS mock_interviews (
-            id                  SERIAL PRIMARY KEY,
-            position            VARCHAR(128) NOT NULL DEFAULT '',
-            topic               VARCHAR(256) NOT NULL DEFAULT '',
-            difficulty          VARCHAR(16)  NOT NULL DEFAULT 'medium',
-            rounds              INTEGER      NOT NULL DEFAULT 0,
-            qa_json             JSONB        NOT NULL DEFAULT '[]',
-            score               INTEGER,
-            strengths           TEXT,
-            weaknesses          TEXT,
-            overall_evaluation  TEXT,
-            created_at          TIMESTAMPTZ  NOT NULL DEFAULT NOW()
-        )
-    """)
-    db.commit()
+    db.executescript(_SCHEMA_SQL)
+    _migrate_columns(db)
+    db.executescript(_INDEX_SQL)
 
     defaults = {
         "greeting_template": "您好！看到贵司在招{job_title}，很感兴趣。PS：正在和你聊天的这个AI工具是我自己开发的——就当是我的技术名片了",
@@ -91,12 +280,11 @@ def init_db():
         "default_city": "淄博",
     }
     for k, v in defaults.items():
-        cur.execute(
-            "INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO NOTHING",
+        db.execute(
+            "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT (key) DO NOTHING",
             (k, v),
         )
     db.commit()
-    cur.close()
 
 
 def _row_to_dict(row) -> Optional[dict]:
@@ -137,20 +325,20 @@ def _apply_hr_active_days(job: dict):
 
 
 def add_application(job: dict) -> int:
+    url = job.get("url", "") or ""
     db = get_db()
     cur = db.cursor()
     cur.execute(
-        """INSERT INTO applications
+        """INSERT OR IGNORE INTO applications
            (job_title, company, company_id, salary, job_url, city, experience, education, hr_name, hr_title, hr_active, description, legal_rep, is_boss, area_district, business_district, company_size, industry)
-           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-           ON CONFLICT (job_url) DO NOTHING
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            RETURNING id""",
         (
             job.get("title", ""),
             job.get("company", ""),
             job.get("company_id", ""),
             job.get("salary", ""),
-            job.get("url", ""),
+            url,
             job.get("city", ""),
             job.get("experience", ""),
             job.get("education", ""),
@@ -167,6 +355,10 @@ def add_application(job: dict) -> int:
         ),
     )
     row = cur.fetchone()
+    if row is None and url:
+        # job_url 已存在（唯一索引冲突），返回已有记录 id
+        cur.execute("SELECT id FROM applications WHERE job_url=? ORDER BY id LIMIT 1", (url,))
+        row = cur.fetchone()
     db.commit()
     cur.close()
     return row["id"] if row else 0
@@ -174,8 +366,8 @@ def add_application(job: dict) -> int:
 
 def get_application(app_id: int) -> Optional[dict]:
     db = get_db()
-    cur = db.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cur.execute("SELECT * FROM applications WHERE id=%s", (app_id,))
+    cur = db.cursor()
+    cur.execute("SELECT * FROM applications WHERE id=?", (app_id,))
     row = cur.fetchone()
     cur.close()
     return _row_to_dict(row)
@@ -183,8 +375,8 @@ def get_application(app_id: int) -> Optional[dict]:
 
 def get_application_by_url(url: str) -> Optional[dict]:
     db = get_db()
-    cur = db.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cur.execute("SELECT * FROM applications WHERE job_url=%s", (url,))
+    cur = db.cursor()
+    cur.execute("SELECT * FROM applications WHERE job_url=?", (url,))
     row = cur.fetchone()
     cur.close()
     return _row_to_dict(row)
@@ -213,7 +405,7 @@ def update_application_from_job(app_id: int, job: dict) -> Optional[dict]:
     assignments = []
     for column, value in fields.items():
         value = (value or "").strip()
-        assignments.append(f"{column}=CASE WHEN %s!='' THEN %s ELSE {column} END")
+        assignments.append(f"{column}=CASE WHEN ?!='' THEN ? ELSE {column} END")
         params.extend([value, value])
     params.append(app_id)
 
@@ -221,7 +413,7 @@ def update_application_from_job(app_id: int, job: dict) -> Optional[dict]:
     cur = db.cursor()
     cur.execute(
         f"""UPDATE applications SET {", ".join(assignments)},
-            updated_at=CURRENT_TIMESTAMP WHERE id=%s""",
+            updated_at=CURRENT_TIMESTAMP WHERE id=?""",
         params,
     )
     db.commit()
@@ -231,14 +423,14 @@ def update_application_from_job(app_id: int, job: dict) -> Optional[dict]:
 
 def list_applications(status: Optional[str] = None, limit: int = 50) -> List[dict]:
     db = get_db()
-    cur = db.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur = db.cursor()
     if status:
         cur.execute(
-            "SELECT * FROM applications WHERE status=%s ORDER BY updated_at DESC LIMIT %s",
+            "SELECT * FROM applications WHERE status=? ORDER BY updated_at DESC LIMIT ?",
             (status, limit),
         )
     else:
-        cur.execute("SELECT * FROM applications ORDER BY updated_at DESC LIMIT %s", (limit,))
+        cur.execute("SELECT * FROM applications ORDER BY updated_at DESC LIMIT ?", (limit,))
     rows = cur.fetchall()
     cur.close()
     result = _rows_to_list(rows)
@@ -252,13 +444,13 @@ def update_application_status(app_id: int, status: str, greeting_text: Optional[
     cur = db.cursor()
     if greeting_text:
         cur.execute(
-            """UPDATE applications SET status=%s, greeting_text=%s, greeting_sent_at=CURRENT_TIMESTAMP,
-               updated_at=CURRENT_TIMESTAMP WHERE id=%s""",
+            """UPDATE applications SET status=?, greeting_text=?, greeting_sent_at=CURRENT_TIMESTAMP,
+               updated_at=CURRENT_TIMESTAMP WHERE id=?""",
             (status, greeting_text, app_id),
         )
     else:
         cur.execute(
-            "UPDATE applications SET status=%s, updated_at=CURRENT_TIMESTAMP WHERE id=%s",
+            "UPDATE applications SET status=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
             (status, app_id),
         )
     db.commit()
@@ -267,8 +459,8 @@ def update_application_status(app_id: int, status: str, greeting_text: Optional[
 
 def get_today_application_count() -> int:
     db = get_db()
-    cur = db.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cur.execute("SELECT COUNT(*) as cnt FROM applications WHERE greeting_sent_at::date = CURRENT_DATE")
+    cur = db.cursor()
+    cur.execute("SELECT COUNT(*) as cnt FROM applications WHERE date(greeting_sent_at) = date('now')")
     row = cur.fetchone()
     cur.close()
     return row["cnt"] if row else 0
@@ -276,7 +468,7 @@ def get_today_application_count() -> int:
 
 def get_today_pending_count() -> int:
     db = get_db()
-    cur = db.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur = db.cursor()
     cur.execute("SELECT COUNT(*) as cnt FROM applications WHERE status='pending'")
     row = cur.fetchone()
     cur.close()
@@ -285,10 +477,11 @@ def get_today_pending_count() -> int:
 
 def count_hours_replied_in_range(hours: int) -> int:
     db = get_db()
-    cur = db.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur = db.cursor()
     cur.execute(
-        "SELECT COUNT(*) as cnt FROM conversations WHERE last_message_from='hr' AND last_message_at > NOW() - INTERVAL '1 hour' * %s",
-        (hours,),
+        "SELECT COUNT(*) as cnt FROM conversations WHERE last_message_from='hr' "
+        "AND last_message_at >= datetime('now', ?)",
+        (f"-{int(hours)} hours",),
     )
     row = cur.fetchone()
     cur.close()
@@ -297,8 +490,8 @@ def count_hours_replied_in_range(hours: int) -> int:
 
 def count_interest_level(level: str) -> int:
     db = get_db()
-    cur = db.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cur.execute("SELECT COUNT(*) as cnt FROM conversations WHERE interest_level=%s", (level,))
+    cur = db.cursor()
+    cur.execute("SELECT COUNT(*) as cnt FROM conversations WHERE interest_level=?", (level,))
     row = cur.fetchone()
     cur.close()
     return row["cnt"] if row else 0
@@ -306,9 +499,9 @@ def count_interest_level(level: str) -> int:
 
 def get_pending_applications(limit: int = 50) -> List[dict]:
     db = get_db()
-    cur = db.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur = db.cursor()
     cur.execute(
-        "SELECT * FROM applications WHERE status='pending' AND job_url!='' ORDER BY id LIMIT %s",
+        "SELECT * FROM applications WHERE status='pending' AND job_url!='' ORDER BY id LIMIT ?",
         (limit,),
     )
     rows = cur.fetchall()
@@ -319,10 +512,10 @@ def get_pending_applications(limit: int = 50) -> List[dict]:
 def list_jobs_by_company(company_id: str = "", company: str = "") -> List[dict]:
     """按 company_id 或 company 名返回该公司下所有已入库的岗位。"""
     db = get_db()
-    cur = db.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur = db.cursor()
     if company_id:
         cur.execute(
-            "SELECT * FROM applications WHERE company_id=%s ORDER BY id DESC",
+            "SELECT * FROM applications WHERE company_id=? ORDER BY id DESC",
             (company_id,),
         )
         rows = cur.fetchall()
@@ -331,7 +524,7 @@ def list_jobs_by_company(company_id: str = "", company: str = "") -> List[dict]:
             return _rows_to_list(rows)
     if company:
         cur.execute(
-            "SELECT * FROM applications WHERE company=%s ORDER BY id DESC",
+            "SELECT * FROM applications WHERE company=? ORDER BY id DESC",
             (company,),
         )
         rows = cur.fetchall()
@@ -344,15 +537,15 @@ def list_jobs_by_company(company_id: str = "", company: str = "") -> List[dict]:
 def list_companies_by_position_count(min_count: int = 1, limit: int = 50) -> List[dict]:
     """按公司聚合，统计 distinct job_url 数倒序。"""
     db = get_db()
-    cur = db.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur = db.cursor()
     cur.execute(
         """SELECT company, company_id, COUNT(DISTINCT job_url) AS position_count, MAX(id) AS latest_job_id
            FROM applications
            WHERE company != '' AND job_url != ''
            GROUP BY company, COALESCE(NULLIF(company_id, ''), company)
-           HAVING COUNT(DISTINCT job_url) >= %s
+           HAVING COUNT(DISTINCT job_url) >= ?
            ORDER BY position_count DESC, latest_job_id DESC
-           LIMIT %s""",
+           LIMIT ?""",
         (min_count, limit),
     )
     rows = cur.fetchall()
@@ -363,10 +556,10 @@ def list_companies_by_position_count(min_count: int = 1, limit: int = 50) -> Lis
 def company_already_applied(company: str = "", company_id: str = "") -> bool:
     """该公司下是否已经有 status in (applied, replied) 的记录。"""
     db = get_db()
-    cur = db.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur = db.cursor()
     if company_id:
         cur.execute(
-            "SELECT 1 FROM applications WHERE company_id=%s AND status IN ('applied','replied') LIMIT 1",
+            "SELECT 1 FROM applications WHERE company_id=? AND status IN ('applied','replied') LIMIT 1",
             (company_id,),
         )
         row = cur.fetchone()
@@ -375,7 +568,7 @@ def company_already_applied(company: str = "", company_id: str = "") -> bool:
             return True
     if company:
         cur.execute(
-            "SELECT 1 FROM applications WHERE company=%s AND status IN ('applied','replied') LIMIT 1",
+            "SELECT 1 FROM applications WHERE company=? AND status IN ('applied','replied') LIMIT 1",
             (company,),
         )
         row = cur.fetchone()
@@ -388,10 +581,11 @@ def company_already_applied(company: str = "", company_id: str = "") -> bool:
 def save_job_embedding(job_url: str, embedding: list):
     """存储 JD 的 embedding 向量（JSON 格式）。"""
     import json
+
     db = get_db()
     cur = db.cursor()
     cur.execute(
-        "UPDATE applications SET embedding=%s WHERE job_url=%s",
+        "UPDATE applications SET embedding=? WHERE job_url=?",
         (json.dumps(embedding, ensure_ascii=False), job_url),
     )
     db.commit()
@@ -401,8 +595,9 @@ def save_job_embedding(job_url: str, embedding: list):
 def get_all_job_embeddings() -> list:
     """返回所有已存储 embedding 的岗位摘要 + HR 反馈信号。"""
     import json
+
     db = get_db()
-    cur = db.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur = db.cursor()
     cur.execute(
         """SELECT a.job_url, a.job_title, a.company, a.description, a.embedding,
                   a.optimize_result, a.chat_suggestion_result, a.greeting_text, a.status,
@@ -410,7 +605,7 @@ def get_all_job_embeddings() -> list:
            FROM applications a
            LEFT JOIN conversations c ON c.application_id = a.id
            WHERE a.embedding IS NOT NULL AND a.embedding != ''
-           ORDER BY a.id DESC""",
+           ORDER BY a.id DESC"""
     )
     rows = cur.fetchall()
     cur.close()
@@ -425,20 +620,22 @@ def get_all_job_embeddings() -> list:
             continue
         if not emb or len(emb) < 16:
             continue
-        result.append({
-            "job_url": r["job_url"],
-            "job_title": r["job_title"],
-            "company": r["company"],
-            "description": (r["description"] or "")[:500],
-            "embedding": emb,
-            "optimize_result": r["optimize_result"] or "",
-            "chat_suggestion_result": r["chat_suggestion_result"] or "",
-            "greeting_text": r["greeting_text"] or "",
-            "status": r["status"] or "",
-            "interest_level": r["interest_level"] or "",
-            "resume_sent": bool(r["resume_sent"]),
-            "wechat_shared": bool(r["hr_wechat"] and r["wechat_shared_at"]),
-        })
+        result.append(
+            {
+                "job_url": r["job_url"],
+                "job_title": r["job_title"],
+                "company": r["company"],
+                "description": (r["description"] or "")[:500],
+                "embedding": emb,
+                "optimize_result": r["optimize_result"] or "",
+                "chat_suggestion_result": r["chat_suggestion_result"] or "",
+                "greeting_text": r["greeting_text"] or "",
+                "status": r["status"] or "",
+                "interest_level": r["interest_level"] or "",
+                "resume_sent": bool(r["resume_sent"]),
+                "wechat_shared": bool(r["hr_wechat"] and r["wechat_shared_at"]),
+            }
+        )
     return result
 
 
@@ -449,16 +646,16 @@ def get_all_job_embeddings() -> list:
 
 def get_or_create_conversation(application_id: int, hr_name: str, hr_company: str, job_title: str) -> int:
     db = get_db()
-    cur = db.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur = db.cursor()
     if application_id:
-        cur.execute("SELECT id FROM conversations WHERE application_id=%s", (application_id,))
+        cur.execute("SELECT id FROM conversations WHERE application_id=?", (application_id,))
         row = cur.fetchone()
         if row:
             cur.close()
             return row["id"]
     name = hr_name.strip() if hr_name else ""
     if name:
-        cur.execute("SELECT id FROM conversations WHERE hr_name=%s AND status!='closed'", (name,))
+        cur.execute("SELECT id FROM conversations WHERE hr_name=? AND status!='closed'", (name,))
         row = cur.fetchone()
         if row:
             cur.close()
@@ -468,20 +665,20 @@ def get_or_create_conversation(application_id: int, hr_name: str, hr_company: st
     cur = db.cursor()
     cur.execute(
         """INSERT INTO conversations (application_id, hr_name, hr_company, job_title)
-           VALUES (%s, %s, %s, %s)
+           VALUES (?, ?, ?, ?)
            RETURNING id""",
         (application_id, name, hr_company, job_title),
     )
     row = cur.fetchone()
     db.commit()
     cur.close()
-    return row["id"]
+    return row["id"] if row else 0
 
 
 def get_conversation(conv_id: int) -> Optional[dict]:
     db = get_db()
-    cur = db.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cur.execute("SELECT * FROM conversations WHERE id=%s", (conv_id,))
+    cur = db.cursor()
+    cur.execute("SELECT * FROM conversations WHERE id=?", (conv_id,))
     row = cur.fetchone()
     cur.close()
     return _row_to_dict(row)
@@ -489,7 +686,7 @@ def get_conversation(conv_id: int) -> Optional[dict]:
 
 def list_active_conversations() -> List[dict]:
     db = get_db()
-    cur = db.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur = db.cursor()
     cur.execute("SELECT * FROM conversations WHERE status!='closed' ORDER BY updated_at DESC")
     rows = cur.fetchall()
     cur.close()
@@ -499,7 +696,7 @@ def list_active_conversations() -> List[dict]:
 def list_unreplied_conversations() -> List[dict]:
     """返回 has_unreplied=1 且 status=active 且 auto_reply_enabled=1 的会话"""
     db = get_db()
-    cur = db.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur = db.cursor()
     cur.execute(
         "SELECT * FROM conversations WHERE has_unreplied=1 AND status='active' AND auto_reply_enabled=1 ORDER BY updated_at DESC"
     )
@@ -510,9 +707,9 @@ def list_unreplied_conversations() -> List[dict]:
 
 def find_conversation_by_hr_name(hr_name: str) -> Optional[dict]:
     db = get_db()
-    cur = db.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur = db.cursor()
     cur.execute(
-        "SELECT * FROM conversations WHERE hr_name=%s ORDER BY updated_at DESC LIMIT 1",
+        "SELECT * FROM conversations WHERE hr_name=? ORDER BY updated_at DESC LIMIT 1",
         (hr_name,),
     )
     row = cur.fetchone()
@@ -524,9 +721,9 @@ def update_conversation_last_message(conv_id: int, text: str, sender: str, unrea
     db = get_db()
     cur = db.cursor()
     cur.execute(
-        """UPDATE conversations SET last_message_text=%s, last_message_from=%s,
-           last_message_at=CURRENT_TIMESTAMP, unread_count=GREATEST(0, unread_count+%s),
-           updated_at=CURRENT_TIMESTAMP WHERE id=%s""",
+        """UPDATE conversations SET last_message_text=?, last_message_from=?,
+           last_message_at=CURRENT_TIMESTAMP, unread_count=MAX(0, unread_count+?),
+           updated_at=CURRENT_TIMESTAMP WHERE id=?""",
         (text[:200], sender, unread_delta, conv_id),
     )
     db.commit()
@@ -537,7 +734,7 @@ def update_conversation_status(conv_id: int, status: str):
     db = get_db()
     cur = db.cursor()
     cur.execute(
-        "UPDATE conversations SET status=%s, updated_at=CURRENT_TIMESTAMP WHERE id=%s",
+        "UPDATE conversations SET status=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
         (status, conv_id),
     )
     db.commit()
@@ -548,7 +745,7 @@ def update_conversation_interest(conv_id: int, level: str):
     db = get_db()
     cur = db.cursor()
     cur.execute(
-        "UPDATE conversations SET interest_level=%s, updated_at=CURRENT_TIMESTAMP WHERE id=%s",
+        "UPDATE conversations SET interest_level=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
         (level, conv_id),
     )
     db.commit()
@@ -559,7 +756,7 @@ def update_conversation_wechat(conv_id: int, wechat_id: str):
     db = get_db()
     cur = db.cursor()
     cur.execute(
-        "UPDATE conversations SET hr_wechat=%s, wechat_shared_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=%s",
+        "UPDATE conversations SET hr_wechat=?, wechat_shared_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?",
         (wechat_id, conv_id),
     )
     db.commit()
@@ -569,7 +766,7 @@ def update_conversation_wechat(conv_id: int, wechat_id: str):
 def mark_resume_sent(conv_id: int):
     db = get_db()
     cur = db.cursor()
-    cur.execute("UPDATE conversations SET resume_sent=1, updated_at=CURRENT_TIMESTAMP WHERE id=%s", (conv_id,))
+    cur.execute("UPDATE conversations SET resume_sent=1, updated_at=CURRENT_TIMESTAMP WHERE id=?", (conv_id,))
     db.commit()
     cur.close()
 
@@ -577,7 +774,7 @@ def mark_resume_sent(conv_id: int):
 def mark_phone_shared(conv_id: int):
     db = get_db()
     cur = db.cursor()
-    cur.execute("UPDATE conversations SET phone_shared=1, updated_at=CURRENT_TIMESTAMP WHERE id=%s", (conv_id,))
+    cur.execute("UPDATE conversations SET phone_shared=1, updated_at=CURRENT_TIMESTAMP WHERE id=?", (conv_id,))
     db.commit()
     cur.close()
 
@@ -585,7 +782,7 @@ def mark_phone_shared(conv_id: int):
 def get_wechat_exchanges() -> List[dict]:
     """返回所有已获取到微信号的会话，包含岗位详情。"""
     db = get_db()
-    cur = db.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur = db.cursor()
     cur.execute(
         """SELECT c.id, c.hr_name, c.hr_company, c.job_title, c.hr_wechat,
                   c.wechat_shared_at, c.interest_level,
@@ -604,7 +801,7 @@ def update_conversation_transfer_requested(conv_id: int):
     db = get_db()
     cur = db.cursor()
     cur.execute(
-        "UPDATE conversations SET transfer_requested=1, transfer_requested_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=%s",
+        "UPDATE conversations SET transfer_requested=1, transfer_requested_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?",
         (conv_id,),
     )
     db.commit()
@@ -614,7 +811,7 @@ def update_conversation_transfer_requested(conv_id: int):
 def get_transfer_requests() -> List[dict]:
     """返回所有转人工请求的会话，包含岗位详情。"""
     db = get_db()
-    cur = db.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur = db.cursor()
     cur.execute(
         """SELECT c.id, c.hr_name, c.hr_company, c.job_title, c.last_message_text,
                   c.transfer_requested_at, c.interest_level,
@@ -633,7 +830,7 @@ def set_auto_reply(conv_id: int, enabled: bool):
     db = get_db()
     cur = db.cursor()
     cur.execute(
-        "UPDATE conversations SET auto_reply_enabled=%s, updated_at=CURRENT_TIMESTAMP WHERE id=%s",
+        "UPDATE conversations SET auto_reply_enabled=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
         (1 if enabled else 0, conv_id),
     )
     db.commit()
@@ -651,26 +848,26 @@ def add_message(
     db = get_db()
     cur = db.cursor()
     cur.execute(
-        "INSERT INTO messages (conversation_id, sender, content, delivery_status, ai_generated) VALUES (%s, %s, %s, %s, %s) RETURNING id",
+        "INSERT INTO messages (conversation_id, sender, content, delivery_status, ai_generated) VALUES (?, ?, ?, ?, ?) RETURNING id",
         (conversation_id, sender, content, delivery_status, 1 if ai_generated else 0),
     )
     row = cur.fetchone()
     # 我发消息后标记为已回复
     if sender == "me":
         cur.execute(
-            "UPDATE conversations SET has_unreplied=0, updated_at=CURRENT_TIMESTAMP WHERE id=%s",
+            "UPDATE conversations SET has_unreplied=0, updated_at=CURRENT_TIMESTAMP WHERE id=?",
             (conversation_id,),
         )
     db.commit()
     cur.close()
-    return row["id"]
+    return row["id"] if row else 0
 
 
 def get_messages(conversation_id: int, limit: int = 50) -> List[dict]:
     db = get_db()
-    cur = db.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur = db.cursor()
     cur.execute(
-        "SELECT * FROM messages WHERE conversation_id=%s ORDER BY created_at ASC, id ASC LIMIT %s",
+        "SELECT * FROM messages WHERE conversation_id=? ORDER BY created_at ASC, id ASC LIMIT ?",
         (conversation_id, limit),
     )
     rows = cur.fetchall()
@@ -680,9 +877,9 @@ def get_messages(conversation_id: int, limit: int = 50) -> List[dict]:
 
 def get_recent_messages(conversation_id: int, limit: int = 5) -> List[dict]:
     db = get_db()
-    cur = db.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur = db.cursor()
     cur.execute(
-        "SELECT * FROM messages WHERE conversation_id=%s ORDER BY created_at DESC, id DESC LIMIT %s",
+        "SELECT * FROM messages WHERE conversation_id=? ORDER BY created_at DESC, id DESC LIMIT ?",
         (conversation_id, limit),
     )
     rows = cur.fetchall()
@@ -693,16 +890,16 @@ def get_recent_messages(conversation_id: int, limit: int = 5) -> List[dict]:
 def replace_conversation_messages(conversation_id: int, messages: List[dict]):
     """用 BOSS 当前消息历史覆盖本地缓存，避免 Web 端展示过期或错会话内容。"""
     db = get_db()
-    cur = db.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur = db.cursor()
     cur.execute(
-        "SELECT content FROM messages WHERE conversation_id=%s AND ai_generated=1",
+        "SELECT content FROM messages WHERE conversation_id=? AND ai_generated=1",
         (conversation_id,),
     )
     old_ai = {r["content"] for r in cur.fetchall()}
     cur.close()
 
     cur = db.cursor()
-    cur.execute("DELETE FROM messages WHERE conversation_id=%s", (conversation_id,))
+    cur.execute("DELETE FROM messages WHERE conversation_id=?", (conversation_id,))
     for msg in messages:
         sender = msg.get("sender", "hr")
         content = (msg.get("content") or "").strip()
@@ -711,13 +908,18 @@ def replace_conversation_messages(conversation_id: int, messages: List[dict]):
             continue
         ai_generated = 1 if sender == "me" and content in old_ai else 0
         cur.execute(
-            "INSERT INTO messages (conversation_id, sender, content, delivery_status, ai_generated) VALUES (%s, %s, %s, %s, %s)",
+            "INSERT INTO messages (conversation_id, sender, content, delivery_status, ai_generated) VALUES (?, ?, ?, ?, ?)",
             (conversation_id, sender, content, delivery_status, ai_generated),
         )
     # 自动判断: 最后一条非系统HR消息之后是否有"me"的回复
     _system_prefixes = (
-        "你与该职位竞争者PK情况", "竞争力分析", "BOSS安全提示",
-        "系统消息", "沟通分析", "今日推荐", "该Boss已查看了你的简历",
+        "你与该职位竞争者PK情况",
+        "竞争力分析",
+        "BOSS安全提示",
+        "系统消息",
+        "沟通分析",
+        "今日推荐",
+        "该Boss已查看了你的简历",
         "对方已查看了您的附件简历",
     )
     _has_unreplied = 0
@@ -727,14 +929,11 @@ def replace_conversation_messages(conversation_id: int, messages: List[dict]):
             continue
         if (m.get("content") or "").startswith(_system_prefixes):
             continue
-        _has_reply = any(
-            messages[j].get("sender") == "me"
-            for j in range(i + 1, len(messages))
-        )
+        _has_reply = any(messages[j].get("sender") == "me" for j in range(i + 1, len(messages)))
         _has_unreplied = 0 if _has_reply else 1
         break
     cur.execute(
-        "UPDATE conversations SET has_unreplied=%s, updated_at=CURRENT_TIMESTAMP WHERE id=%s",
+        "UPDATE conversations SET has_unreplied=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
         (_has_unreplied, conversation_id),
     )
     db.commit()
@@ -743,9 +942,9 @@ def replace_conversation_messages(conversation_id: int, messages: List[dict]):
 
 def get_last_hr_message(conversation_id: int) -> Optional[dict]:
     db = get_db()
-    cur = db.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur = db.cursor()
     cur.execute(
-        "SELECT * FROM messages WHERE conversation_id=%s AND sender='hr' ORDER BY created_at DESC LIMIT 1",
+        "SELECT * FROM messages WHERE conversation_id=? AND sender='hr' ORDER BY created_at DESC LIMIT 1",
         (conversation_id,),
     )
     row = cur.fetchone()
@@ -755,9 +954,9 @@ def get_last_hr_message(conversation_id: int) -> Optional[dict]:
 
 def message_exists(conversation_id: int, content: str, sender: str) -> bool:
     db = get_db()
-    cur = db.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur = db.cursor()
     cur.execute(
-        "SELECT id FROM messages WHERE conversation_id=%s AND content=%s AND sender=%s ORDER BY created_at DESC LIMIT 1",
+        "SELECT id FROM messages WHERE conversation_id=? AND content=? AND sender=? ORDER BY created_at DESC LIMIT 1",
         (conversation_id, content, sender),
     )
     row = cur.fetchone()
@@ -772,8 +971,8 @@ def message_exists(conversation_id: int, content: str, sender: str) -> bool:
 
 def get_setting(key: str, default: str = "") -> str:
     db = get_db()
-    cur = db.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cur.execute("SELECT value FROM settings WHERE key=%s", (key,))
+    cur = db.cursor()
+    cur.execute("SELECT value FROM settings WHERE key=?", (key,))
     row = cur.fetchone()
     cur.close()
     return row["value"] if row else default
@@ -783,7 +982,8 @@ def set_setting(key: str, value: str):
     db = get_db()
     cur = db.cursor()
     cur.execute(
-        "INSERT INTO settings (key, value, updated_at) VALUES (%s, %s, CURRENT_TIMESTAMP) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_at=CURRENT_TIMESTAMP",
+        "INSERT INTO settings (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP) "
+        "ON CONFLICT (key) DO UPDATE SET value=excluded.value, updated_at=CURRENT_TIMESTAMP",
         (key, value),
     )
     db.commit()
@@ -792,7 +992,7 @@ def set_setting(key: str, value: str):
 
 def get_all_settings() -> dict:
     db = get_db()
-    cur = db.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur = db.cursor()
     cur.execute("SELECT key, value FROM settings")
     rows = cur.fetchall()
     cur.close()
@@ -812,7 +1012,7 @@ def _ensure_today():
     db = get_db()
     cur = db.cursor()
     cur.execute(
-        "INSERT INTO daily_stats (date) VALUES (%s) ON CONFLICT (date) DO NOTHING",
+        "INSERT INTO daily_stats (date) VALUES (?) ON CONFLICT (date) DO NOTHING",
         (_today(),),
     )
     db.commit()
@@ -824,7 +1024,7 @@ def increment_daily_stat(field: str):
     db = get_db()
     cur = db.cursor()
     cur.execute(
-        f"UPDATE daily_stats SET {field} = {field} + 1 WHERE date=%s",
+        f"UPDATE daily_stats SET {field} = {field} + 1 WHERE date=?",
         (_today(),),
     )
     db.commit()
@@ -834,8 +1034,8 @@ def increment_daily_stat(field: str):
 def get_daily_stats(date_str: Optional[str] = None) -> dict:
     d = date_str or _today()
     db = get_db()
-    cur = db.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cur.execute("SELECT * FROM daily_stats WHERE date=%s", (d,))
+    cur = db.cursor()
+    cur.execute("SELECT * FROM daily_stats WHERE date=?", (d,))
     row = cur.fetchone()
     cur.close()
     return dict(row) if row else {}
@@ -843,10 +1043,8 @@ def get_daily_stats(date_str: Optional[str] = None) -> dict:
 
 def get_today_auto_reply_count() -> int:
     db = get_db()
-    cur = db.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cur.execute(
-        "SELECT COUNT(*) as cnt FROM messages WHERE ai_generated=1 AND created_at::date = CURRENT_DATE"
-    )
+    cur = db.cursor()
+    cur.execute("SELECT COUNT(*) as cnt FROM messages WHERE ai_generated=1 AND date(created_at) = date('now')")
     row = cur.fetchone()
     cur.close()
     return row["cnt"] if row else 0
@@ -864,14 +1062,14 @@ def add_to_shortlist(
     cur = db.cursor()
     try:
         cur.execute(
-            "INSERT INTO shortlists (job_url, job_title, company, salary, city, note) VALUES (%s,%s,%s,%s,%s,%s) RETURNING id",
+            "INSERT INTO shortlists (job_url, job_title, company, salary, city, note) VALUES (?,?,?,?,?,?) RETURNING id",
             (job_url, title, company, salary, city, note),
         )
         row = cur.fetchone()
         db.commit()
         cur.close()
-        return row["id"]
-    except psycopg2.errors.UniqueViolation:
+        return row["id"] if row else 0
+    except sqlite3.IntegrityError:
         db.rollback()
         cur.close()
         return 0
@@ -880,15 +1078,15 @@ def add_to_shortlist(
 def remove_from_shortlist(shortlist_id: int):
     db = get_db()
     cur = db.cursor()
-    cur.execute("DELETE FROM shortlists WHERE id=%s", (shortlist_id,))
+    cur.execute("DELETE FROM shortlists WHERE id=?", (shortlist_id,))
     db.commit()
     cur.close()
 
 
 def list_shortlists(limit: int = 100) -> list:
     db = get_db()
-    cur = db.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cur.execute("SELECT * FROM shortlists ORDER BY created_at DESC LIMIT %s", (limit,))
+    cur = db.cursor()
+    cur.execute("SELECT * FROM shortlists ORDER BY created_at DESC LIMIT ?", (limit,))
     rows = cur.fetchall()
     cur.close()
     return _rows_to_list(rows)
@@ -896,99 +1094,11 @@ def list_shortlists(limit: int = 100) -> list:
 
 def is_in_shortlist(job_url: str) -> bool:
     db = get_db()
-    cur = db.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cur.execute("SELECT COUNT(*) as cnt FROM shortlists WHERE job_url=%s", (job_url,))
+    cur = db.cursor()
+    cur.execute("SELECT COUNT(*) as cnt FROM shortlists WHERE job_url=?", (job_url,))
     row = cur.fetchone()
     cur.close()
     return row["cnt"] > 0 if row else False
-
-
-# ══════════════════════════════════════
-#  面试会话持久化
-# ══════════════════════════════════════
-
-
-def save_interview_session(
-    session_id: str,
-    job_focus: str = "",
-    job_context: str = "",
-    resume: str = "",
-    round_count: int = 0,
-    max_rounds: int = 10,
-    history_json: str = "[]",
-    last_question: str = "",
-    last_category: str = "",
-    status: str = "active",
-):
-    db = get_db()
-    cur = db.cursor()
-    cur.execute(
-        """INSERT INTO interview_sessions
-           (session_id, job_focus, job_context, resume, round_count, max_rounds,
-            history_json, last_question, last_category, status, updated_at)
-           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
-           ON CONFLICT (session_id) DO UPDATE SET
-               job_focus=EXCLUDED.job_focus,
-               job_context=EXCLUDED.job_context,
-               resume=EXCLUDED.resume,
-               round_count=EXCLUDED.round_count,
-               max_rounds=EXCLUDED.max_rounds,
-               history_json=EXCLUDED.history_json,
-               last_question=EXCLUDED.last_question,
-               last_category=EXCLUDED.last_category,
-               status=EXCLUDED.status,
-               updated_at=CURRENT_TIMESTAMP""",
-        (session_id, job_focus, job_context, resume, round_count, max_rounds,
-         history_json, last_question, last_category, status),
-    )
-    db.commit()
-    cur.close()
-
-
-def get_interview_session(session_id: str) -> dict | None:
-    db = get_db()
-    cur = db.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cur.execute(
-        "SELECT * FROM interview_sessions WHERE session_id=%s", (session_id,)
-    )
-    row = cur.fetchone()
-    cur.close()
-    return dict(row) if row else None
-
-
-def list_active_interview_sessions() -> list:
-    db = get_db()
-    cur = db.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cur.execute(
-        "SELECT session_id, job_focus, round_count, status, created_at, updated_at "
-        "FROM interview_sessions WHERE status='active' ORDER BY updated_at DESC"
-    )
-    rows = cur.fetchall()
-    cur.close()
-    return _rows_to_list(rows)
-
-
-def list_all_interview_sessions() -> list:
-    db = get_db()
-    cur = db.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cur.execute(
-        "SELECT session_id, job_focus, round_count, status, created_at, updated_at "
-        "FROM interview_sessions ORDER BY updated_at DESC"
-    )
-    rows = cur.fetchall()
-    cur.close()
-    return _rows_to_list(rows)
-
-
-def mark_interview_ended(session_id: str):
-    db = get_db()
-    cur = db.cursor()
-    cur.execute(
-        "UPDATE interview_sessions SET status='ended', updated_at=CURRENT_TIMESTAMP WHERE session_id=%s",
-        (session_id,),
-    )
-    db.commit()
-    cur.close()
 
 
 # ══════════════════════════════════════
@@ -1028,9 +1138,9 @@ def _extract_city_from_text(text: str) -> tuple:
     city = found_cities[-1]
     detail = ""
     detail_patterns = [
-        r'(?:在|到|去|地址[：:]?\s*)([一-龥]{2,20}(?:区|路|街|道|镇|园|大厦|广场|中心|楼|层|号))',
-        r'([一-龥]{2,10}(?:区|街道|镇|园区|开发区))',
-        r'(?:地点|地址|位置)[：:]\s*([^\n，。,]{2,50})',
+        r"(?:在|到|去|地址[：:]?\s*)([一-龥]{2,20}(?:区|路|街|道|镇|园|大厦|广场|中心|楼|层|号))",
+        r"([一-龥]{2,10}(?:区|街道|镇|园区|开发区))",
+        r"(?:地点|地址|位置)[：:]\s*([^\n，。,]{2,50})",
     ]
     for pat in detail_patterns:
         m = re.search(pat, text)
@@ -1060,9 +1170,9 @@ def save_offline_interview_location(
 ) -> int:
     """保存线下面试地点记录。已存在则更新。返回记录ID。"""
     db = get_db()
-    cur = db.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur = db.cursor()
     cur.execute(
-        "SELECT id FROM offline_interview_locations WHERE conversation_id=%s",
+        "SELECT id FROM offline_interview_locations WHERE conversation_id=?",
         (conversation_id,),
     )
     row = cur.fetchone()
@@ -1072,33 +1182,33 @@ def save_offline_interview_location(
     if row:
         cur.execute(
             """UPDATE offline_interview_locations
-               SET hr_name=%s, hr_company=%s, job_title=%s, city=%s,
-                   location_detail=%s, hr_message=%s, updated_at=CURRENT_TIMESTAMP
-               WHERE id=%s
+               SET hr_name=?, hr_company=?, job_title=?, city=?,
+                   location_detail=?, hr_message=?, updated_at=CURRENT_TIMESTAMP
+               WHERE id=?
                RETURNING id""",
             (hr_name, hr_company, job_title, city, location_detail, hr_message, row["id"]),
         )
         result_row = cur.fetchone()
         db.commit()
         cur.close()
-        return result_row["id"]
+        return result_row["id"] if result_row else row["id"]
     cur.execute(
         """INSERT INTO offline_interview_locations
            (conversation_id, hr_name, hr_company, job_title, city, location_detail, hr_message)
-           VALUES (%s, %s, %s, %s, %s, %s, %s)
+           VALUES (?, ?, ?, ?, ?, ?, ?)
            RETURNING id""",
         (conversation_id, hr_name, hr_company, job_title, city, location_detail, hr_message),
     )
     result_row = cur.fetchone()
     db.commit()
     cur.close()
-    return result_row["id"]
+    return result_row["id"] if result_row else 0
 
 
 def list_offline_interview_locations() -> list:
     """获取所有线下面试地点，按城市分组排序。"""
     db = get_db()
-    cur = db.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur = db.cursor()
     cur.execute(
         """SELECT * FROM offline_interview_locations
            ORDER BY city, updated_at DESC"""
@@ -1125,7 +1235,7 @@ def mark_offline_location_replied(location_id: int):
     db = get_db()
     cur = db.cursor()
     cur.execute(
-        "UPDATE offline_interview_locations SET replied=1, updated_at=CURRENT_TIMESTAMP WHERE id=%s",
+        "UPDATE offline_interview_locations SET replied=1, updated_at=CURRENT_TIMESTAMP WHERE id=?",
         (location_id,),
     )
     db.commit()
@@ -1150,7 +1260,7 @@ def save_token_usage(
     tps = total_tokens / (elapsed_ms / 1000) if elapsed_ms > 0 else 0
     cur.execute(
         """INSERT INTO token_usage (model, source, prompt_tokens, completion_tokens, total_tokens, elapsed_ms, tokens_per_sec)
-           VALUES (%s,%s,%s,%s,%s,%s,%s)""",
+           VALUES (?,?,?,?,?,?,?)""",
         (model, source, prompt_tokens, completion_tokens, total_tokens, elapsed_ms, round(tps, 1)),
     )
     db.commit()
@@ -1160,7 +1270,7 @@ def save_token_usage(
 def get_token_stats(days: int = 7) -> dict:
     """获取最近 N 天的 Token 统计"""
     db = get_db()
-    cur = db.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur = db.cursor()
     try:
         cur.execute(
             """SELECT
@@ -1168,11 +1278,11 @@ def get_token_stats(days: int = 7) -> dict:
                  COALESCE(SUM(total_tokens),0) as total_tokens,
                  COALESCE(SUM(prompt_tokens),0) as total_prompt_tokens,
                  COALESCE(SUM(completion_tokens),0) as total_completion_tokens,
-                 COALESCE(ROUND(AVG(tokens_per_sec)::numeric, 1), 0) as avg_tps,
-                 COALESCE(ROUND(AVG(elapsed_ms)::numeric, 0), 0) as avg_elapsed_ms
+                 COALESCE(ROUND(AVG(tokens_per_sec), 1), 0) as avg_tps,
+                 COALESCE(ROUND(AVG(elapsed_ms), 0), 0) as avg_elapsed_ms
                FROM token_usage
-               WHERE created_at >= CURRENT_DATE - INTERVAL '1 day' * %s""",
-            (days,),
+               WHERE created_at >= datetime('now', ?)""",
+            (f"-{int(days)} days",),
         )
         row = cur.fetchone()
         db.commit()
@@ -1187,9 +1297,9 @@ def get_token_stats(days: int = 7) -> dict:
 def list_token_usage(limit: int = 20) -> list:
     """最近 N 条用量记录"""
     db = get_db()
-    cur = db.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur = db.cursor()
     cur.execute(
-        "SELECT * FROM token_usage ORDER BY created_at DESC LIMIT %s",
+        "SELECT * FROM token_usage ORDER BY created_at DESC LIMIT ?",
         (limit,),
     )
     rows = cur.fetchall()
@@ -1199,37 +1309,51 @@ def list_token_usage(limit: int = 20) -> list:
 
 # ── 模拟面试记录 ──
 
-def save_mock_interview(position: str, topic: str, difficulty: str,
-                        rounds: int, qa_json: str, score: int,
-                        strengths: str, weaknesses: str, overall_evaluation: str):
+
+def save_mock_interview(
+    position: str,
+    topic: str,
+    difficulty: str,
+    rounds: int,
+    qa_json: str,
+    score: int,
+    strengths: str,
+    weaknesses: str,
+    overall_evaluation: str,
+):
     """保存模拟面试记录"""
     db = get_db()
     cur = db.cursor()
-    cur.execute("""
+    cur.execute(
+        """
         INSERT INTO mock_interviews
             (position, topic, difficulty, rounds, qa_json, score,
              strengths, weaknesses, overall_evaluation)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         RETURNING id
-    """, (position, topic, difficulty, rounds, qa_json, score,
-          strengths, weaknesses, overall_evaluation))
+    """,
+        (position, topic, difficulty, rounds, qa_json, score, strengths, weaknesses, overall_evaluation),
+    )
     row = cur.fetchone()
     db.commit()
     cur.close()
-    return row[0] if row else None
+    return row["id"] if row else None
 
 
 def list_mock_interviews(limit: int = 20) -> list:
     """最近 N 条模拟面试记录"""
     db = get_db()
-    cur = db.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cur.execute("""
+    cur = db.cursor()
+    cur.execute(
+        """
         SELECT id, position, topic, difficulty, rounds, score,
                strengths, weaknesses, overall_evaluation, created_at
         FROM mock_interviews
         ORDER BY created_at DESC
-        LIMIT %s
-    """, (limit,))
+        LIMIT ?
+    """,
+        (limit,),
+    )
     rows = cur.fetchall()
     cur.close()
     return _rows_to_list(rows)
@@ -1238,11 +1362,22 @@ def list_mock_interviews(limit: int = 20) -> list:
 def get_mock_interview(mock_id: int) -> Optional[dict]:
     """获取单条模拟面试详情（含完整 Q&A）"""
     db = get_db()
-    cur = db.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cur.execute("SELECT * FROM mock_interviews WHERE id = %s", (mock_id,))
+    cur = db.cursor()
+    cur.execute("SELECT * FROM mock_interviews WHERE id = ?", (mock_id,))
     row = cur.fetchone()
     cur.close()
     return dict(row) if row else None
+
+
+def delete_mock_interview(mock_id: int) -> bool:
+    """删除单条模拟面试记录"""
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("DELETE FROM mock_interviews WHERE id = ?", (mock_id,))
+    deleted = cur.rowcount > 0
+    db.commit()
+    cur.close()
+    return deleted
 
 
 # 启动时初始化

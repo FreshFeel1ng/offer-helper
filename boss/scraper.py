@@ -15,14 +15,13 @@
 
 import argparse
 import io
-import json
 import os
 import re
+import ssl
 import subprocess
 import sys
 import urllib.parse
 import urllib.request
-import ssl
 from datetime import date
 
 import yaml
@@ -54,7 +53,7 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 
 def load_config():
     """从命令行参数 + 配置文件合并出最终配置"""
-    
+
     # 1. 先读命令行参数
     parser = argparse.ArgumentParser(description="招聘网站爬虫 — 每天自动扫岗位")
     parser.add_argument("--keywords", help="搜索关键词，逗号分隔，比如: Java,Go,Python")
@@ -67,7 +66,7 @@ def load_config():
     parser.add_argument("--no-db", "--no-mysql", dest="no_db", action="store_true", help="不存数据库，只生成日报")
     parser.add_argument("--config", help="配置文件路径，默认 config.yaml")
     args = parser.parse_args()
-    
+
     # 2. 读配置文件
     config_path = args.config or DEFAULT_CONFIG_FILE
     file_config = {}
@@ -77,21 +76,21 @@ def load_config():
             # 替换环境变量 ${VAR}
             raw = re.sub(r'\$\{(\w+)\}', lambda m: os.environ.get(m.group(1), ''), raw)
             file_config = yaml.safe_load(raw) or {}
-    
+
     # 3. 合并：命令行参数优先
     def first(*sources):
         for s in sources:
             if s is not None:
                 return s
         return None
-    
+
     # 关键词
     kw_arg = args.keywords
     kw_file = file_config.get("keywords")
     kw = first(kw_arg, kw_file, DEFAULT_KEYWORDS)
     if isinstance(kw, str):
         kw = [k.strip() for k in kw.split(",")]
-    
+
     # 数据库配置
     db_cfg = file_config.get("database", {})
     db_type = db_cfg.get("type", "mysql")
@@ -100,7 +99,7 @@ def load_config():
     db_password = db_cfg.get("password", "") or os.environ.get("DB_PASSWORD", "") or os.environ.get("MYSQL_PWD", "")
     db_name = db_cfg.get("database", "ai_jobs_db")
     no_db = args.no_db or (not db_password and db_type == "mysql")
-    
+
     return {
         "keywords": kw,
         "salary_min": first(args.salary_min, file_config.get("filters", {}).get("salary_min"), DEFAULT_SALARY_MIN),
@@ -124,7 +123,7 @@ def load_config():
 def scrape_zhaopin(keyword="Python开发", max_jobs=50):
     """去智联招聘搜岗位，返回列表（多页）"""
     all_jobs = []
-    
+
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True, args=['--no-sandbox'])
@@ -134,21 +133,21 @@ def scrape_zhaopin(keyword="Python开发", max_jobs=50):
                 locale="zh-CN",
             )
             page = context.new_page()
-            
+
             kw = urllib.parse.quote(keyword)
-            
+
             # 爬多页
             for page_num in range(1, 4):  # 第1-3页
                 if len(all_jobs) >= max_jobs:
                     break
                 url = f"https://sou.zhaopin.com/?jl=489&kw={kw}&p={page_num}"
-                
+
                 page.goto(url, wait_until="networkidle", timeout=20000)
                 page.wait_for_timeout(3000)
-                
+
                 html = page.content()
                 soup = BeautifulSoup(html, "html.parser")
-                
+
                 # 选岗位卡片
                 cards = []
                 for sel in [
@@ -160,7 +159,7 @@ def scrape_zhaopin(keyword="Python开发", max_jobs=50):
                     cards = soup.select(sel)
                     if cards and len(cards) > 1:
                         break
-                
+
                 if cards and len(cards) > 1:
                     for card in cards[:max_jobs]:
                         try:
@@ -171,18 +170,18 @@ def scrape_zhaopin(keyword="Python开发", max_jobs=50):
                                     if jd:
                                         job["requirements"] = jd
                                 all_jobs.append(job)
-                        except:
+                        except Exception:
                             continue
                     print(f"  [智联] 关键词'{keyword}' 第{page_num}页: {len(cards)}个")
                 else:
                     print(f"  [智联] 关键词'{keyword}' 第{page_num}页: 没有找到岗位卡片")
-            
+
             context.close()
             browser.close()
-            
+
     except Exception as e:
         print(f"  [智联] 爬失败了: {e}", file=sys.stderr)
-    
+
     return all_jobs
 
 
@@ -191,7 +190,7 @@ def _parse_card(card):
     title_el = card.select_one("a.jobinfo__name, .jobinfo__name")
     salary_el = card.select_one(".jobinfo__salary, p.jobinfo__salary")
     company_el = card.select_one("a.companyinfo__name, .companyinfo__name")
-    
+
     exp = ''
     edu = ''
     info_items = card.select(".jobinfo__other-info-item")
@@ -201,34 +200,36 @@ def _parse_card(card):
             exp = t
         elif any(x in t for x in ['本科', '硕士', '博士', '大专']):
             edu = t
-    
+
     card_text = card.get_text()
     if not exp:
         m = re.search(r'(\d+-\d+年|\d+年以下|\d+年以上|经验不限)', card_text)
-        if m: exp = m.group(1)
+        if m:
+            exp = m.group(1)
     if not edu:
         m = re.search(r'(本科|硕士|博士|大专|学历不限)', card_text)
-        if m: edu = m.group(1)
-    
+        if m:
+            edu = m.group(1)
+
     title = title_el.get_text(strip=True) if title_el else ''
     salary = salary_el.get_text(strip=True) if salary_el else ''
     company = company_el.get_text(strip=True) if company_el else ''
-    
+
     if not title:
         return None
-    
+
     # "2-4万" 转成 "20K-40K"
     if salary:
         nums = re.findall(r'(\d+\.?\d*)', salary.replace('万', '').strip())
         if '万' in salary and len(nums) >= 2:
             salary = f"{int(float(nums[0])*10)}K-{int(float(nums[1])*10)}K"
-    
+
     link = title_el.get('href', '') if title_el else ''
     if link and not link.startswith('http'):
         link = 'https://www.zhaopin.com' + link
-    
+
     card_text_full = card.get_text(separator='\n')
-    
+
     return {
         "title": title,
         "company": company,
@@ -254,7 +255,7 @@ def _fetch_jd_detail(url):
         })
         resp = urllib.request.urlopen(req, timeout=10, context=ctx)
         html = resp.read().decode("utf-8", errors="replace")
-        
+
         soup = BeautifulSoup(html, "html.parser")
         for sel in ["div[class*='describtion']", "div[class*='job-description']",
                      "div[class*='detail']", "article", ".job-box"]:
@@ -264,7 +265,7 @@ def _fetch_jd_detail(url):
                 if len(text) > 80:
                     return text[:3000]
         return ""
-    except:
+    except Exception:
         return ""
 
 
@@ -273,7 +274,8 @@ def _fetch_jd_detail(url):
 # ============================================================
 
 def salary_ok(s, lo, hi):
-    if not s: return False
+    if not s:
+        return False
     s = s.replace('~','-').replace('—','-').replace('，','-').replace(' ','').replace('k','K').replace('K','')
     mul = 1
     if '万' in s:
@@ -286,17 +288,19 @@ def salary_ok(s, lo, hi):
         low = float(n[0]) * mul
         high = float(n[1]) * mul
         if mul == 1 and low < 5 and high < 10:
-            low *= 10; high *= 10
+            low *= 10
+            high *= 10
         return low <= hi and high >= lo
     return False
 
 
 def exp_ok(s, lo, hi):
-    if not s: return False
+    if not s:
+        return False
     n = re.findall(r'(\d+)', s)
     if len(n) >= 2:
-        l, h = int(n[0]), int(n[1])
-        return l <= hi and h >= lo
+        low, high = int(n[0]), int(n[1])
+        return low <= hi and high >= lo
     return False
 
 
@@ -330,7 +334,8 @@ def classify(text):
     m = {}
     for c, kw in CATEGORIES.items():
         f = [k for k in kw if k.lower() in tl]
-        if f: m[c] = f
+        if f:
+            m[c] = f
     return m
 
 
@@ -346,7 +351,7 @@ def save_to_db(jobs, cfg):
         for cat, kw in cls.items():
             kw_str = ",".join(kw)
             req = (j.get("requirements","") or "")[:500]
-            sql = f"""INSERT INTO job_requirements 
+            sql = f"""INSERT INTO job_requirements
 (collected_date,title,company,salary,experience,education,requirement_category,requirement_text,source_url)
 VALUES ('{TODAY}','{_e(j['title'])}','{_e(j['company'])}','{_e(j['salary'])}',
 '{_e(j['experience'])}','{_e(j['education'])}','{_e(cat)}',
@@ -391,7 +396,8 @@ def clean_db(cfg):
 
 
 def _e(s):
-    if not s: return ""
+    if not s:
+        return ""
     return (s.replace("\\","\\\\\\\\").replace("'","\\'")
             .replace('"','\\"').replace("\n"," ").replace("\r"," "))
 
@@ -410,14 +416,16 @@ def render_md(jobs, cfg):
         f"经验 **{cfg['exp_min']}-{cfg['exp_max']}年** · "
         f"学历 **{edu_label}** · "
         f"共 {len(jobs)} 条\n---\n")
-    
+
     lines.append("## 概览\n")
     ss = sorted(set(j["salary"] for j in jobs if j["salary"]))
     cs = sorted(set(j["company"] for j in jobs if j["company"]))
-    if ss: lines.append(f"- 💰 薪资: {' | '.join(ss[:8])}")
-    if cs: lines.append(f"- 🏢 公司: {'、'.join(cs[:10])}")
+    if ss:
+        lines.append(f"- 💰 薪资: {' | '.join(ss[:8])}")
+    if cs:
+        lines.append(f"- 🏢 公司: {'、'.join(cs[:10])}")
     lines.append("")
-    
+
     cc = {}
     for j in jobs:
         for c in classify(j["title"] + " " + j.get("requirements","")):
@@ -427,7 +435,7 @@ def render_md(jobs, cfg):
         for c, n in sorted(cc.items(), key=lambda x: -x[1]):
             bar = "■" * min(n, 15)
             lines.append(f"- {c}: {bar} ({n}条)")
-    
+
     lines.append("\n---\n## 岗位列表\n")
     for i, j in enumerate(jobs, 1):
         lines.append(f"### {i}. {j['title']}")
@@ -436,17 +444,17 @@ def render_md(jobs, cfg):
         lines.append(f"- 经验: {j['experience']}")
         lines.append(f"- 学历: {j['education']}")
         lines.append(f"- 链接: {j['source']}\n")
-        
+
         req = j.get("requirements","").strip()
         if req:
             lines.append("**岗位要求：**\n")
             lines.append("```\n" + req[:2000] + "\n```\n")
-        
+
         cl = classify(req + " " + j["title"])
         if cl:
             lines.append("  " + " ".join(f"`{c}`" for c in cl))
         lines.append("\n---\n")
-    
+
     lines.append(f"\n---\n*数据采集于 {DATE_STR}*\n")
     return "\n".join(lines)
 
@@ -457,7 +465,7 @@ def render_md(jobs, cfg):
 
 def main():
     cfg = load_config()
-    
+
     kw_list = cfg["keywords"]
     print(f"搜: {', '.join(kw_list)}")
     print(f"筛: 薪资{cfg['salary_min']}K-{cfg['salary_max']}K, "
@@ -469,9 +477,9 @@ def main():
     else:
         print(f"数据库: mysql://{cfg['db_host']}/{cfg['db_name']}")
     print()
-    
+
     os.makedirs(cfg["output_dir"], exist_ok=True)
-    
+
     # 爬
     all_jobs = []
     for kw in kw_list:
@@ -479,7 +487,7 @@ def main():
         all_jobs.extend(jobs)
         if len(all_jobs) >= 100:
             break
-    
+
     # 去重
     seen = set()
     unique = []
@@ -488,13 +496,13 @@ def main():
         if key not in seen and j["title"]:
             seen.add(key)
             unique.append(j)
-    
+
     # 过滤
     filtered = [j for j in unique
                 if salary_ok(j["salary"], cfg["salary_min"], cfg["salary_max"])
                 and exp_ok(j["experience"], cfg["exp_min"], cfg["exp_max"])
                 and edu_ok(j.get("education",""), cfg["education"])]
-    
+
     # 如果太少，放宽
     if len(filtered) < 10:
         extra = [j for j in unique
@@ -507,22 +515,22 @@ def main():
             if k not in seen_f and len(filtered) < 15:
                 seen_f.add(k)
                 filtered.append(j)
-    
+
     filtered = filtered[:100]
-    
+
     if not filtered:
         print("一条都没捞到，可能是网站改版了或者关键词没匹配上")
         return
-    
+
     print(f"\n搞定 {len(filtered)} 条\n")
-    
+
     # 出日报
     md = render_md(filtered, cfg)
     md_path = os.path.join(cfg["output_dir"], f"招聘日报_{DATE_STR}.md")
     with open(md_path, "w", encoding="utf-8") as f:
         f.write(md)
     print(f"日报: {md_path}")
-    
+
     # 存库
     if not cfg["no_db"]:
         try:
@@ -532,7 +540,7 @@ def main():
             print("已存 MySQL")
         except Exception as e:
             print(f"存 MySQL 失败了（不影响日报）: {e}")
-    
+
     # 打出来看看
     print(f"\n{'─'*50}")
     for j in filtered:

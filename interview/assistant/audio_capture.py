@@ -5,13 +5,12 @@
 """
 import asyncio
 import io
-import wave
 import threading
-from typing import Optional, Callable
+import wave
+from typing import Callable, Optional
 
 import numpy as np
 import sounddevice as sd
-from openai import OpenAI
 
 from .config import config
 
@@ -129,9 +128,11 @@ class SystemAudioCapture:
 
 
 class WhisperTranscriber:
-    """使用 OpenAI/DeepSeek Whisper API 做语音转文字"""
+    """使用 OpenAI 兼容的 Whisper 接口做语音转文字"""
 
     def __init__(self):
+        from openai import OpenAI
+
         self.client = OpenAI(
             api_key=config.deepseek_api_key,
             base_url=config.deepseek_base_url,
@@ -139,7 +140,7 @@ class WhisperTranscriber:
 
     async def transcribe(self, audio_data: bytes) -> Optional[str]:
         """将音频数据转为文字（异步，在线程池中执行）"""
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         try:
             result = await loop.run_in_executor(
                 None,

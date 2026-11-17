@@ -29,6 +29,6 @@ def index():
 
 
 # 注册面试辅助模块（WebSocket + REST API）
-from assistant.routes import register_assistant_routes
+from assistant.routes import register_assistant_routes  # noqa: E402
 
 register_assistant_routes(app)

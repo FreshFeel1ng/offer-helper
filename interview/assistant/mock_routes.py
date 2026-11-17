@@ -105,23 +105,19 @@ def register_mock_routes(app):
                     report = await msession.generate_report()
                     print(f"[Mock面试] 总评: {report.get('overall_score', 0)}/100")
                     try:
-                        from boss.state import get_db
-                        db = get_db()
-                        cur = db.cursor()
-                        cur.execute(
-                            "INSERT INTO mock_interviews "
-                            "(position, topic, difficulty, rounds, qa_json, score, "
-                            "strengths, weaknesses, overall_evaluation) "
-                            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)",
-                            (msession.position, msession.topic, msession.difficulty,
-                             len(msession.qa_history),
-                             json.dumps(msession.qa_history, ensure_ascii=False),
-                             report.get("overall_score", 0),
-                             json.dumps(report.get("strengths", []), ensure_ascii=False),
-                             json.dumps(report.get("weaknesses", []), ensure_ascii=False),
-                             json.dumps(report, ensure_ascii=False)))
-                        db.commit()
-                        cur.close()
+                        from boss.state import save_mock_interview
+
+                        save_mock_interview(
+                            position=msession.position,
+                            topic=msession.topic,
+                            difficulty=msession.difficulty,
+                            rounds=len(msession.qa_history),
+                            qa_json=json.dumps(msession.qa_history, ensure_ascii=False),
+                            score=report.get("overall_score", 0),
+                            strengths=json.dumps(report.get("strengths", []), ensure_ascii=False),
+                            weaknesses=json.dumps(report.get("weaknesses", []), ensure_ascii=False),
+                            overall_evaluation=json.dumps(report, ensure_ascii=False),
+                        )
                         print("[Mock面试] 报告已保存到数据库")
                     except Exception as e:
                         print(f"[Mock面试] 保存报告失败: {e}")

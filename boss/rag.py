@@ -1,31 +1,37 @@
 #!/usr/bin/env python3
-"""历史 JD 的 RAG 检索 —— 发现与当前岗位相似的历史投递，复用优化建议和招呼语经验。"""
+"""历史 JD 的 RAG 检索 —— 发现与当前岗位相似的历史投递，复用优化建议和招呼语经验。
 
-import sys
+向量化用 BGE-M3（boss/llm_client.py），相似度用 numpy 批量算：
+所有历史向量拼成一个矩阵，一次矩阵乘法得到全部相似度。
+"""
+
+import json
 import time
-from pathlib import Path
 
 import numpy as np
 
 from .llm_client import get_embedding
-
-from .state import get_all_job_embeddings, save_job_embedding, get_application_by_url
+from .state import get_all_job_embeddings, get_application_by_url, save_job_embedding
 
 SIMILARITY_THRESHOLD = 0.55  # 低于此相似度的历史 JD 不纳入参考
 
 
-def _cosine_similarity(a: list, b: list) -> float:
-    """余弦相似度，numpy 一把梭。"""
-    a_arr = np.array(a, dtype=float)
-    b_arr = np.array(b, dtype=float)
-    na, nb = np.linalg.norm(a_arr), np.linalg.norm(b_arr)
-    if na == 0 or nb == 0:
-        return 0.0
-    return float(np.dot(a_arr, b_arr) / (na * nb))
+def _normalize(vec) -> np.ndarray:
+    """归一化向量，零向量用极小范数兜底避免除零。"""
+    arr = np.asarray(vec, dtype=np.float32)
+    norm = float(np.linalg.norm(arr))
+    return arr / norm if norm > 0 else arr
 
 
-def similar_jds(description: str, limit: int = 5, exclude_url: str = "") -> list[dict]:
+def similar_jds(
+    description: str,
+    limit: int = 5,
+    exclude_url: str = "",
+    query_vec: list | None = None,
+) -> list[dict]:
     """给定一段 JD 文本，返回历史中最相似的岗位列表。
+
+    query_vec: 调用方已经算好的 JD 向量（避免同一段 JD 重复调用 embedding 接口）。
 
     每条包含: job_url, job_title, company, similarity,
               optimize_result, chat_suggestion_result, greeting_text, status
@@ -37,20 +43,53 @@ def similar_jds(description: str, limit: int = 5, exclude_url: str = "") -> list
     desc_preview = description[:60].replace("\n", " ")
     print(f"[RAG] 正在检索相似历史JD... (desc_len={len(description)}, preview=\"{desc_preview}...\")")
 
-    query_vec = get_embedding(description[:1000])
+    if not query_vec:
+        try:
+            query_vec = get_embedding(description[:1000])
+        except Exception as e:
+            # embedding 服务不可用（未配 Key / 网络异常）时，RAG 只是增强项，不能拖垮调用方
+            print(f"[RAG] embedding 不可用，跳过相似 JD 检索: {e}")
+            return []
+    if not query_vec:
+        print("[RAG] embedding 为空，跳过相似 JD 检索")
+        return []
+
     all_jobs = get_all_job_embeddings()
 
     if not all_jobs:
         print(f"[RAG] 历史 JD 库为空，跳过 ({(time.time()-t0)*1000:.0f}ms)")
         return []
 
-    results = []
+    dim = len(query_vec)
+    candidates = []
+    vectors = []
+    mismatched = 0
     for job in all_jobs:
         if exclude_url and job["job_url"] == exclude_url:
             continue
-        sim = _cosine_similarity(query_vec, job["embedding"])
-        if sim >= SIMILARITY_THRESHOLD:
-            job["similarity"] = round(sim, 4)
+        vec = job["embedding"]
+        # 换过 embedding 模型后老向量的维度对不上，直接跳过（重新生成即可覆盖）
+        if not vec or len(vec) != dim:
+            mismatched += 1
+            continue
+        candidates.append(job)
+        vectors.append(vec)
+
+    if not candidates:
+        print(
+            f"[RAG] 无可比的历史 JD (维度不匹配 {mismatched} 条, 模型可能已更换，重新分析岗位即可刷新)"
+        )
+        return []
+
+    matrix = np.asarray(vectors, dtype=np.float32)
+    norms = np.linalg.norm(matrix, axis=1)
+    norms[norms == 0] = 1e-8
+    sims = (matrix @ _normalize(query_vec)) / norms
+
+    results = []
+    for job, sim in zip(candidates, sims):
+        if float(sim) >= SIMILARITY_THRESHOLD:
+            job["similarity"] = round(float(sim), 4)
             del job["embedding"]  # 不往外传向量
             results.append(job)
 
@@ -60,10 +99,10 @@ def similar_jds(description: str, limit: int = 5, exclude_url: str = "") -> list
     elapsed = (time.time() - t0) * 1000
     if top:
         best = top[0]
-        print(f"[RAG] 检索完成 ({elapsed:.0f}ms, 扫描{len(all_jobs)}条, 命中{len(results)}条, "
+        print(f"[RAG] 检索完成 ({elapsed:.0f}ms, 扫描{len(candidates)}条, 命中{len(results)}条, "
               f"top={best['job_title']}@{best['company']} sim={best['similarity']})")
     else:
-        print(f"[RAG] 检索完成 ({elapsed:.0f}ms, 扫描{len(all_jobs)}条, 无高相似命中)")
+        print(f"[RAG] 检索完成 ({elapsed:.0f}ms, 扫描{len(candidates)}条, 无高相似命中)")
 
     return top
 
@@ -74,12 +113,17 @@ def ensure_jd_embedding(job_url: str, description: str) -> list | None:
         return None
     existing = get_application_by_url(job_url)
     if existing and (existing.get("embedding") or "").strip():
-        import json
         try:
             return json.loads(existing["embedding"])
         except Exception:
             pass
-    vec = get_embedding(description[:1000])
+    try:
+        vec = get_embedding(description[:1000])
+    except Exception as e:
+        print(f"[RAG] embedding 不可用，跳过 JD 向量入库: {e}")
+        return None
+    if not vec:
+        return None
     save_job_embedding(job_url, vec)
     return vec
 
@@ -134,7 +178,7 @@ def build_rag_context(similar: list[dict], context_type: str = "optimize") -> st
                 parts.append(f"  **当时发出的招呼语**: \"{gt[:300]}\"")
                 # 分析：如果这招呼语效果很好，提示LLM可以模仿
                 if job.get("interest_level") == "high" or job.get("resume_sent"):
-                    parts.append(f"  👆 这份招呼语效果很好，可以借鉴其风格和切入点")
+                    parts.append("  👆 这份招呼语效果很好，可以借鉴其风格和切入点")
 
         elif context_type == "optimize":
             opt = job.get("optimize_result") or ""
